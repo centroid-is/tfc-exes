@@ -16,6 +16,7 @@ pub type El1809 = El1xxx<El1809Info, 16, 2>;
 // todo use this: https://github.com/rust-lang/rust/issues/76560
 pub struct El1xxx<D: DeviceInfo + Entries<N>, const N: usize, const ARR_LEN: usize> {
     signals: [Signal<bool>; N],
+    last_bits: [bool; N],
     log_key: String,
     _marker: PhantomData<D>,
     error: bool,
@@ -33,13 +34,15 @@ impl<D: DeviceInfo + Entries<N>, const N: usize, const ARR_LEN: usize> El1xxx<D,
                         None,
                     ),
                 );
-                // tfc::ipc::dbus::SignalInterface::register(
-                //     signal.base(),
-                //     dbus.clone(),
-                //     signal.subscribe(),
-                // );
+                #[cfg(feature = "dbus")]
+                tfc::ipc::dbus::SignalInterface::register(
+                    signal.base(),
+                    dbus.clone(),
+                    signal.subscribe(),
+                );
                 signal
             }),
+            last_bits: [false; N],
             log_key,
             _marker: PhantomData,
             error: false,
@@ -77,10 +80,13 @@ impl<D: DeviceInfo + Entries<N> + Send + Sync, const N: usize, const ARR_LEN: us
         let input_bits = input_data.view_bits::<bitvec::order::Lsb0>();
 
         for (idx, bit) in input_bits.iter().enumerate() {
-            // let _ = self.signals[idx].async_send(*bit).await.map_err(|e| {
-            //     error!("Error sending signal {}: {}", self.log_key, e);
-            //     e
-            // });
+            if self.last_bits[idx] != *bit {
+                let _ = self.signals[idx].async_send(*bit).await.map_err(|e| {
+                    error!("Error sending signal {}: {}", self.log_key, e);
+                    e
+                });
+            }
+            self.last_bits[idx] = *bit;
         }
 
         Ok(())

@@ -14,6 +14,7 @@ use tfc::logger;
 use tfc::progbase;
 use tfc::time::MicroDuration;
 use zbus;
+use zbus::Connection;
 
 mod devices;
 use devices::device::make_device;
@@ -39,13 +40,13 @@ struct BusConfig {
 struct Bus {
     main_device: Arc<MainDevice<'static>>,
     config: ConfMan<BusConfig>,
-    // devices: ArrayVec<Box<dyn Device>, MAX_SUBDEVICES>,
+    devices: ArrayVec<Box<dyn Device>, MAX_SUBDEVICES>,
     group: Option<SubDeviceGroup<MAX_SUBDEVICES, PDI_LEN, ethercrab::subdevice_group::Op>>,
     log_key: String,
 }
 
 impl Bus {
-    pub fn new(conn: zbus::Connection) -> Self {
+    pub fn new(conn: Connection) -> Self {
         let (tx, rx, pdu_loop) = PDU_STORAGE.try_split().expect("can only split once");
         let main_device = Arc::new(MainDevice::new(
             pdu_loop,
@@ -66,13 +67,13 @@ impl Bus {
         Self {
             main_device,
             config,
-            // devices: ArrayVec::new(),
+            devices: ArrayVec::new(),
             group: None,
             log_key: "ethercat".to_string(),
         }
     }
     pub async fn init(&mut self, dbus: zbus::Connection) -> Result<(), Box<dyn Error>> {
-        // self.devices.clear();
+        self.devices.clear();
         let mut group = self
             .main_device
             .init_single_group::<MAX_SUBDEVICES, PDI_LEN>(ethercat_now)
@@ -80,19 +81,19 @@ impl Bus {
         let mut index: u16 = 0;
         for mut subdevice in group.iter(&self.main_device) {
             let identity = subdevice.identity();
-            // let mut device = make_device(
-            //     dbus.clone(),
-            //     identity.vendor_id,
-            //     identity.product_id,
-            //     index,
-            //     subdevice.alias_address(),
-            // );
-            // // TODO: Make futures that can be awaited in parallel
-            // device.setup(&mut subdevice).await.map_err(|e| {
-            //     warn!(target: &self.log_key, "Failed to setup device {}: {}", index, e);
-            //     e
-            // })?;
-            // self.devices.push(device);
+            let mut device = make_device(
+                dbus.clone(),
+                identity.vendor_id,
+                identity.product_id,
+                index,
+                subdevice.alias_address(),
+            );
+            // TODO: Make futures that can be awaited in parallel
+            device.setup(&mut subdevice).await.map_err(|e| {
+                warn!(target: &self.log_key, "Failed to setup device {}: {}", index, e);
+                e
+            })?;
+            self.devices.push(device);
             index += 1;
         }
         trace!(target: &self.log_key, "Setup complete for devices: {}", index);
@@ -121,15 +122,11 @@ impl Bus {
 
             let process_data_instant = Instant::now();
             for (device_index, mut subdevice) in group.iter(&self.main_device).enumerate() {
-                // if let Some(device) = self.devices.get_mut(device_index) {
-                //     // device.process_data(&mut subdevice).await?;
-                // }
+                if let Some(device) = self.devices.get_mut(device_index) {
+                    device.process_data(&mut subdevice).await?;
+                }
             }
             process_data_duration += process_data_instant.elapsed();
-            //
-            // tokio::time::sleep(Duration::from_millis(1)).await;
-            // std::thread::sleep(Duration::from_millis(1));
-            // tokio::task::yield_now().await;
             tick_interval.tick().await;
             cnt += 1;
             if cnt % 1000 == 0 {
