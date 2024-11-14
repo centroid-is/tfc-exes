@@ -48,13 +48,12 @@ struct Bus {
 impl Bus {
     pub fn new(conn: Connection) -> Self {
         let (tx, rx, pdu_loop) = PDU_STORAGE.try_split().expect("can only split once");
+
         let main_device = Arc::new(MainDevice::new(
             pdu_loop,
             Timeouts {
-                state_transition: Duration::from_millis(10000),
-                wait_loop_delay: Duration::from_millis(200000),
-                mailbox_response: Duration::from_millis(10000),
-                mailbox_echo: Duration::from_millis(10000),
+                wait_loop_delay: Duration::from_millis(2),
+                mailbox_response: Duration::from_millis(1000),
                 ..Default::default()
             },
             MainDeviceConfig::default(),
@@ -111,7 +110,7 @@ impl Bus {
     pub async fn run(&mut self) -> Result<(), Box<dyn Error>> {
         let ref mut group = self.group.as_mut().expect("Group not initialized");
 
-        let mut tick_interval = tokio::time::interval(Duration::from_millis(1));
+        let mut tick_interval = tokio::time::interval(self.config.read().cycle_time.into());
         info!(target: &self.log_key, "Ethercat tick interval: {:?}", self.config.read().cycle_time);
         tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut cnt = 0;
@@ -156,7 +155,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", progbase::exe_name());
     println!("{}", progbase::proc_name());
     logger::init_combined_logger()?;
-    trace!(target: "ethercat", "Starting ethercat");
+    debug!(target: "ethercat", "Starting ethercat");
+
     let formatted_name = format!(
         "is.centroid.{}.{}",
         progbase::exe_name(),
@@ -189,5 +189,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let _ = Arc::new(Mutex::new(OperationsImpl::new(bus.clone())));
 
     // std::future::pending::<()>().await;
-    // Ok(())
+    Ok(())
 }
