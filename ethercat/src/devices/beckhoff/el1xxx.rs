@@ -13,7 +13,6 @@ pub type El1008 = El1xxx<El1008Info, 8, 1>;
 pub type El1809 = El1xxx<El1809Info, 16, 2>;
 
 // todo use this: https://github.com/rust-lang/rust/issues/76560
-// todo use this: https://github.com/rust-lang/rust/issues/76560
 pub struct El1xxx<D: DeviceInfo + Entries<N>, const N: usize, const ARR_LEN: usize> {
     signals: [Signal<bool>; N],
     last_bits: [bool; N],
@@ -30,11 +29,11 @@ impl<D: DeviceInfo + Entries<N>, const N: usize, const ARR_LEN: usize> El1xxx<D,
                 let signal = Signal::new(
                     dbus.clone(),
                     Base::new(
-                        format!("{}_s{}_in{}", D::NAME, subdevice_number, D::ENTRIES[idx]).as_str(),
+                        format!("{}/{}/in{}", D::NAME, subdevice_number, D::ENTRIES[idx]).as_str(),
                         None,
                     ),
                 );
-                #[cfg(feature = "dbus")]
+                #[cfg(feature = "dbus-expose")]
                 tfc::ipc::dbus::SignalInterface::register(
                     signal.base(),
                     dbus.clone(),

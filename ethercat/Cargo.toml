@@ -29,4 +29,11 @@ futures = "0.3.30"
 futures-channel = "0.3.30"
 tracing = "0.1.40"
 
+[[bin]]
+name = "ethercat"
+path = "src/main.rs"
 
+[features]
+default = ["dbus-expose"]
+dbus-expose = []
+opcua-expose = []

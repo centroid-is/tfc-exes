@@ -52,8 +52,9 @@ impl Bus {
             pdu_loop,
             Timeouts {
                 state_transition: Duration::from_millis(10000),
-                wait_loop_delay: Duration::from_millis(2),
-                mailbox_response: Duration::from_millis(1000),
+                wait_loop_delay: Duration::from_millis(200000),
+                mailbox_response: Duration::from_millis(10000),
+                mailbox_echo: Duration::from_millis(10000),
                 ..Default::default()
             },
             MainDeviceConfig::default(),
@@ -74,10 +75,12 @@ impl Bus {
     }
     pub async fn init(&mut self, dbus: zbus::Connection) -> Result<(), Box<dyn Error>> {
         self.devices.clear();
+        debug!(target: &self.log_key, "Initializing main device");
         let mut group = self
             .main_device
             .init_single_group::<MAX_SUBDEVICES, PDI_LEN>(ethercat_now)
             .await?;
+        debug!(target: &self.log_key, "Initialized main device");
         let mut index: u16 = 0;
         for mut subdevice in group.iter(&self.main_device) {
             let identity = subdevice.identity();
@@ -139,9 +142,9 @@ impl Bus {
             }
         }
         // If I comment the loop out the load falls down to 0 ish %
-        std::future::pending::<()>().await;
+        // std::future::pending::<()>().await;
 
-        Ok(())
+        // Ok(())
     }
 }
 
@@ -185,6 +188,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // let _ = Arc::new(Mutex::new(OperationsImpl::new(bus.clone())));
 
-    std::future::pending::<()>().await;
-    Ok(())
+    // std::future::pending::<()>().await;
+    // Ok(())
 }
