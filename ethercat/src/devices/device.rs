@@ -19,7 +19,9 @@ pub fn make_device(
         (El1809Info::VENDOR_ID, El1809Info::PRODUCT_ID) => {
             Box::new(El1809::new(dbus, slave_number, alias_address))
         }
-        (I550::VENDOR_ID, I550::PRODUCT_ID) => Box::new(I550),
+        (I550::VENDOR_ID, I550::PRODUCT_ID) => {
+            Box::new(I550::new(dbus, slave_number, alias_address))
+        }
         _ => Box::new(UnimplementedDevice),
     }
 }
