@@ -130,6 +130,54 @@ impl Index for MinSpeed {
     const SUBINDEX: u8 = 1;
 }
 
+#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
+#[wire(bytes = 4)]
+#[serde(transparent)]
+struct AccelerationNumerator {
+    #[wire(bits = 32)]
+    value: u32, // rpm
+}
+impl Default for AccelerationNumerator {
+    fn default() -> Self {
+        Self { value: 3000 }
+    }
+}
+impl Index for AccelerationNumerator {
+    const INDEX: u16 = 0x6048;
+    const SUBINDEX: u8 = 1;
+}
+
+#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
+#[wire(bytes = 2)]
+#[serde(transparent)]
+struct AccelerationDenominator {
+    #[wire(bits = 16)]
+    value: u16, // seconds
+}
+impl Default for AccelerationDenominator {
+    fn default() -> Self {
+        Self { value: 10 }
+    }
+}
+impl Index for AccelerationDenominator {
+    const INDEX: u16 = 0x6048;
+    const SUBINDEX: u8 = 2;
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
+struct Acceleration {
+    #[schemars(
+        description = "Acceleration numerator in RPM",
+        range(min = 0, max = 2147483647)
+    )]
+    numerator: AccelerationNumerator,
+    #[schemars(
+        description = "Acceleration denominator in seconds",
+        range(min = 0, max = 65535)
+    )]
+    denominator: AccelerationDenominator,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
 struct Config {
     // lenze i550 manual 5.8.2 Manual setting of the motor data
@@ -143,6 +191,11 @@ struct Config {
     max_speed: MaxSpeed,
     #[schemars(description = "Min speed in RPM", range(min = 0, max = 480000))]
     min_speed: MinSpeed,
+    #[schemars(
+        description = "Acceleration in deciseconds",
+        range(min = 0, max = 36000)
+    )]
+    acceleration: Acceleration,
 }
 
 pub struct I550 {
@@ -251,6 +304,15 @@ impl Device for I550 {
         device
             .sdo_write_value_index(self.config.read().min_speed)
             .await?;
+        device
+            .sdo_write_value_index(self.config.read().acceleration.numerator)
+            .await?;
+        device
+            .sdo_write_value_index(self.config.read().acceleration.denominator)
+            .await?;
+
+        // device.sdo_write(0x6048, 1, 3000 as u32).await?;
+        // device.sdo_write(0x6048, 2, 1 as u16).await?;
         warn!("I550 setup complete");
         Ok(())
     }
