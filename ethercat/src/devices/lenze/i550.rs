@@ -67,7 +67,7 @@ impl Index for RatedMainsVoltage {
 struct BaseVoltage {
     #[wire(bits = 16)]
     #[schemars(description = "Base voltage in volts")]
-    value: i16, // volts
+    value: u16,
 }
 impl Default for BaseVoltage {
     fn default() -> Self {
@@ -79,10 +79,29 @@ impl Index for BaseVoltage {
     const SUBINDEX: u8 = 1;
 }
 
+#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
+#[wire(bytes = 2)]
+#[serde(transparent)]
+struct BaseFrequency {
+    #[wire(bits = 16)]
+    #[schemars(description = "Base frequency in hertz")]
+    value: u16,
+}
+impl Default for BaseFrequency {
+    fn default() -> Self {
+        Self { value: 50 }
+    }
+}
+impl Index for BaseFrequency {
+    const INDEX: u16 = 0x2B01;
+    const SUBINDEX: u8 = 2;
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
 struct Config {
     rated_mains_voltage: RatedMainsVoltage,
     base_voltage: BaseVoltage,
+    base_frequency: BaseFrequency,
 }
 
 pub struct I550 {
@@ -177,6 +196,9 @@ impl Device for I550 {
             .await?;
         device
             .sdo_write_value_index(self.config.read().base_voltage)
+            .await?;
+        device
+            .sdo_write_value_index(self.config.read().base_frequency)
             .await?;
 
         warn!("I550 setup complete");
