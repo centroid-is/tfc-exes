@@ -38,3 +38,26 @@ impl Device for UnimplementedDevice {
         Ok(())
     }
 }
+
+pub trait Index {
+    const INDEX: u16;
+    const SUBINDEX: u8;
+}
+
+pub trait WriteValueIndex {
+    async fn sdo_write_value_index<T>(&mut self, value: T) -> Result<(), ethercrab::error::Error>
+    where
+        T: Index + ethercrab_wire::EtherCrabWireWrite;
+}
+
+impl<SubDeviceType> WriteValueIndex for SubDeviceRef<'_, SubDeviceType>
+where
+    SubDeviceType: std::ops::Deref<Target = SubDevice>,
+{
+    async fn sdo_write_value_index<T>(&mut self, value: T) -> Result<(), ethercrab::error::Error>
+    where
+        T: Index + ethercrab_wire::EtherCrabWireWrite,
+    {
+        self.sdo_write(T::INDEX, T::SUBINDEX, value).await
+    }
+}

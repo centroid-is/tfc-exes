@@ -1,24 +1,18 @@
+use crate::devices::device_trait::Index;
+use crate::devices::device_trait::WriteValueIndex;
 use crate::devices::device_trait::{Device, DeviceInfo};
 use async_trait::async_trait;
 use atomic_refcell::AtomicRefMut;
-use ethercrab::ds402::ControlWord;
-use ethercrab::ds402::StatusWord;
 use ethercrab::{SubDevice, SubDevicePdi, SubDeviceRef};
 use ethercrab_wire::EtherCrabWireRead;
 use ethercrab_wire::EtherCrabWireWrite;
 use log::warn;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
+use tfc::confman::ConfMan;
 
 use crate::devices::CiA402;
-pub struct I550 {
-    cnt: u128,
-}
-
-impl I550 {
-    pub fn new(dbus: zbus::Connection, slave_number: u16, alias_address: u16) -> Self {
-        Self { cnt: 0 }
-    }
-}
 
 static RX_PDO_ASSIGN: u16 = 0x1C12;
 static TX_PDO_ASSIGN: u16 = 0x1C13;
@@ -47,73 +41,46 @@ struct InputPdo {
     error: i16,
 }
 
-#[derive(Debug, PartialEq)]
-#[repr(u16)]
-enum DriveState {
-    NotReadyToSwitchOn = 1,
-    SwitchOnDisabled = 2,
-    ReadyToSwitchOn = 3,
-    SwitchedOn = 4,
-    OperationEnabled = 5,
-    QuickStopActive = 6,
-    FaultReactionActive = 7,
-    Fault = 8,
+#[derive(Debug, Copy, Clone, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema)]
+#[repr(u8)]
+enum RatedMainsVoltage {
+    Veff230 = 0,
+    Veff400 = 1,
+    Veff480 = 2,
+    Veff120 = 3,
+    Veff230ReducedLuLevel = 10,
+}
+impl Default for RatedMainsVoltage {
+    fn default() -> Self {
+        Self::Veff400
+    }
 }
 
-/// Parse the drive state from status word bits
-///
-/// Status Word Bit Mapping:
-/// - Bit 0: Ready to switch on
-/// - Bit 1: Switched on
-/// - Bit 2: Operation enabled
-/// - Bit 3: Fault
-/// - Bit 4: Voltage enabled
-/// - Bit 5: Quick stop (enabled low)
-/// - Bit 6: Switch on disabled
-pub fn parse_state(status: StatusWord) -> DriveState {
-    let state_ready_to_switch_on = status.contains(StatusWord::READY_TO_SWITCH_ON);
-    let state_switched_on = status.contains(StatusWord::SWITCHED_ON);
-    let state_operation_enabled = status.contains(StatusWord::OP_ENABLED);
-    let state_fault = status.contains(StatusWord::FAULT);
-    let voltage_enabled = status.contains(StatusWord::VOLTAGE_ENABLED);
-    let state_quick_stop = status.contains(StatusWord::QUICK_STOP);
-    let state_switch_on_disabled = status.contains(StatusWord::SWITCH_ON_DISABLED);
+impl Index for RatedMainsVoltage {
+    const INDEX: u16 = 0x2540;
+    const SUBINDEX: u8 = 0x01;
+}
 
-    if state_fault {
-        if state_operation_enabled && state_switched_on && state_ready_to_switch_on {
-            return DriveState::FaultReactionActive;
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
+struct Config {
+    rated_mains_voltage: RatedMainsVoltage,
+}
+
+pub struct I550 {
+    cnt: u128,
+    config: ConfMan<Config>,
+}
+
+impl I550 {
+    pub fn new(dbus: zbus::Connection, slave_number: u16, alias_address: u16) -> Self {
+        Self {
+            cnt: 0,
+            config: ConfMan::new(
+                dbus,
+                &format!("i550_slave_{slave_number}_alias_{alias_address}"),
+            ),
         }
-        return DriveState::Fault;
     }
-
-    if !state_ready_to_switch_on
-        && !state_switched_on
-        && !state_operation_enabled
-        && !state_switch_on_disabled
-    {
-        return DriveState::NotReadyToSwitchOn;
-    }
-
-    if state_switch_on_disabled {
-        return DriveState::SwitchOnDisabled;
-    }
-
-    if !state_quick_stop {
-        return DriveState::QuickStopActive;
-    }
-
-    if state_ready_to_switch_on && state_quick_stop && !state_switched_on {
-        return DriveState::ReadyToSwitchOn;
-    }
-
-    if state_ready_to_switch_on && state_switched_on && voltage_enabled {
-        if state_operation_enabled {
-            return DriveState::OperationEnabled;
-        }
-        return DriveState::SwitchedOn;
-    }
-
-    DriveState::NotReadyToSwitchOn
 }
 
 #[async_trait]
@@ -186,6 +153,10 @@ impl Device for I550 {
 
         // device.sdo_write(BASIC_MOTOR_CONTROL, 0x02, 1 as u8).await?; // Set allow run to constant true
 
+        device
+            .sdo_write_value_index(self.config.read().rated_mains_voltage)
+            .await?;
+
         warn!("I550 setup complete");
         Ok(())
     }
@@ -205,46 +176,26 @@ impl Device for I550 {
             return Ok(());
         }
 
-        // let mut foo = OutputPdo::unpack_from_slice(&output)?;
+        let input_pdo = InputPdo::unpack_from_slice(&input).expect("Error unpacking input PDO");
 
-        let bar = InputPdo::unpack_from_slice(&input)?;
         let control_word = CiA402::transition(
-            bar.status_word.parse_state(),
+            input_pdo.status_word.parse_state(),
             CiA402::TransitionAction::Run,
-            false,
+            true,
         );
-        // let control_word =
-        //     match parse_state(StatusWord::from_bits(bar.status_word).expect("Invalid status word"))
-        //     {
-        //         DriveState::SwitchOnDisabled => ControlWord::STATE_SHUTDOWN,
-        //         DriveState::ReadyToSwitchOn | DriveState::SwitchedOn => {
-        //             ControlWord::STATE_ENABLE_OP
-        //         }
-        //         DriveState::OperationEnabled => ControlWord::STATE_ENABLE_OP,
-        //         DriveState::Fault => ControlWord::STATE_FAULT_RESET,
-        //         _ => ControlWord::STATE_DISABLE_VOLTAGE,
-        //     };
-        let foo = OutputPdo {
+        let output_pdo = OutputPdo {
             control_word,
-            speed: 1490,
+            speed: 1500,
         };
-        foo.pack_to_slice(&mut *output)?;
-
-        // let speed = uom::si::i16::AngularVelocity::new::<
-        //     uom::si::angular_velocity::revolution_per_minute,
-        // >(1000);
-
-        // warn!("foo: {:?}", foo);
-
-        // foo.pack_to_slice(&mut *output)?;
-
-        let bar = InputPdo::unpack_from_slice(&input)?;
+        output_pdo
+            .pack_to_slice(&mut *output)
+            .expect("Error packing output PDO");
 
         self.cnt += 1;
 
         if self.cnt % 1000 == 0 {
-            warn!("foo: {:?}", foo);
-            warn!("bar: {:?}", bar);
+            warn!("output_pdo: {:?}", output_pdo);
+            warn!("input_pdo: {:?}", input_pdo);
             warn!("output: {:?}", output);
         }
 

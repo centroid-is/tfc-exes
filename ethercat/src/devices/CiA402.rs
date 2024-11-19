@@ -1,9 +1,5 @@
+use crate::devices::device_trait::Index;
 use ethercrab_wire::{EtherCrabWireRead, EtherCrabWireWrite};
-
-pub trait Index {
-    const INDEX: u16;
-    const SUBINDEX: u8;
-}
 
 #[derive(Default, Debug, EtherCrabWireWrite)]
 #[wire(bytes = 2)]
