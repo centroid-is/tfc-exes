@@ -61,9 +61,28 @@ impl Index for RatedMainsVoltage {
     const SUBINDEX: u8 = 0x01;
 }
 
+#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
+#[wire(bytes = 2)]
+#[serde(transparent)]
+struct BaseVoltage {
+    #[wire(bits = 16)]
+    #[schemars(description = "Base voltage in volts")]
+    value: i16, // volts
+}
+impl Default for BaseVoltage {
+    fn default() -> Self {
+        Self { value: 400 }
+    }
+}
+impl Index for BaseVoltage {
+    const INDEX: u16 = 0x2B01;
+    const SUBINDEX: u8 = 1;
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
 struct Config {
     rated_mains_voltage: RatedMainsVoltage,
+    base_voltage: BaseVoltage,
 }
 
 pub struct I550 {
@@ -156,6 +175,9 @@ impl Device for I550 {
         device
             .sdo_write_value_index(self.config.read().rated_mains_voltage)
             .await?;
+        device
+            .sdo_write_value_index(self.config.read().base_voltage)
+            .await?;
 
         warn!("I550 setup complete");
         Ok(())
@@ -207,4 +229,36 @@ impl DeviceInfo for I550 {
     const VENDOR_ID: u32 = 0x0000003b;
     const PRODUCT_ID: u32 = 0x69055000;
     const NAME: &'static str = "i550";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use uom::si::electric_potential::decivolt;
+    use uom::si::length::centimeter;
+    // mod cgs {
+    //     use uom::system;
+    //     uom::ISQ!(
+    //         uom::si,
+    //         f32,
+    //         (centimeter, gram, second, ampere, kelvin, mole, candela)
+    //     );
+    // }
+    // mod foo {
+    //     use uom::system;
+    //     uom::ISQ!(uom::si, i16, (decivolt));
+    // }
+
+    #[test]
+    fn test_base_voltage() {
+        // assert_eq!(base_voltage.value, 4000);
+
+        // // store base voltage quantity in decivolt
+        let base_voltage =
+            uom::si::i16::ElectricPotential::new::<uom::si::electric_potential::decivolt>(4001);
+        let value_in_decivolts = base_voltage.get::<uom::si::electric_potential::decivolt>();
+        assert_eq!(value_in_decivolts, 4001);
+        assert_eq!(base_voltage.value, 4000);
+    }
 }
