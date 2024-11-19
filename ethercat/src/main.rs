@@ -18,7 +18,7 @@ use zbus::Connection;
 
 mod devices;
 use devices::device::make_device;
-use devices::device_trait::Device;
+use devices::device_trait::{Device, UnimplementedDevice};
 
 /// Maximum number of SubDevices that can be stored. This must be a power of 2 greater than 1.
 const MAX_SUBDEVICES: usize = 16;
@@ -40,7 +40,7 @@ struct BusConfig {
 struct Bus {
     main_device: Arc<MainDevice<'static>>,
     config: ConfMan<BusConfig>,
-    devices: ArrayVec<Box<dyn Device>, MAX_SUBDEVICES>,
+    devices: [Box<dyn Device>; MAX_SUBDEVICES],
     group: Option<SubDeviceGroup<MAX_SUBDEVICES, PDI_LEN, ethercrab::subdevice_group::Op>>,
     log_key: String,
 }
@@ -53,9 +53,11 @@ impl Bus {
             pdu_loop,
             Timeouts {
                 state_transition: Duration::from_millis(10000),
-                wait_loop_delay: Duration::from_millis(2),
-                mailbox_response: Duration::from_millis(1000),
-                ..Default::default()
+                wait_loop_delay: Duration::from_millis(10000),
+                mailbox_response: Duration::from_millis(10000),
+                mailbox_echo: Duration::from_millis(1000),
+                eeprom: Duration::from_millis(1000),
+                pdu: Duration::from_millis(1000),
             },
             MainDeviceConfig::default(),
         ));
@@ -68,21 +70,20 @@ impl Bus {
         Self {
             main_device,
             config,
-            devices: ArrayVec::new(),
+            devices: std::array::from_fn(|_| Box::new(UnimplementedDevice) as Box<dyn Device>),
             group: None,
             log_key: "ethercat".to_string(),
         }
     }
     pub async fn init(&mut self, dbus: zbus::Connection) -> Result<(), Box<dyn Error>> {
-        self.devices.clear();
         debug!(target: &self.log_key, "Initializing main device");
         let mut group = self
             .main_device
             .init_single_group::<MAX_SUBDEVICES, PDI_LEN>(ethercat_now)
-            .await?;
+            .await?; // BIG TODO HOW CAN I CONFIGURE THIS TIMEOUT, that is putting group into init state? state_transition does not work here
         debug!(target: &self.log_key, "Initialized main device");
         let mut index: u16 = 0;
-        for mut subdevice in group.iter(&self.main_device) {
+        for (idx, mut subdevice) in group.iter(&self.main_device).enumerate() {
             let identity = subdevice.identity();
             let mut device = make_device(
                 dbus.clone(),
@@ -96,7 +97,7 @@ impl Bus {
                 warn!(target: &self.log_key, "Failed to setup device {}: {}", index, e);
                 e
             })?;
-            self.devices.push(device);
+            self.devices[idx] = device;
             index += 1;
         }
         trace!(target: &self.log_key, "Setup complete for devices: {}", index);

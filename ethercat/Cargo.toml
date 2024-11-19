@@ -40,6 +40,7 @@ uom = { version = "0.36.0", default-features = false, features = [
         "si", "std", # Built-in SI system and std library support.
         "serde", # Serde support.
 ]}
+bitflags = "2.6.0"
 
 [[bin]]
 name = "ethercat"

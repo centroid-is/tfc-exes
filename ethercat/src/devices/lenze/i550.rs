@@ -9,6 +9,7 @@ use ethercrab_wire::EtherCrabWireWrite;
 use log::warn;
 use std::error::Error;
 
+use crate::devices::CiA402;
 pub struct I550 {
     cnt: u128,
 }
@@ -25,21 +26,21 @@ static RX_PDO_MAPPING: u16 = 0x1605;
 static TX_PDO_MAPPING: u16 = 0x1A05;
 static BASIC_MOTOR_CONTROL: u16 = 0x2631;
 
-#[derive(ethercrab_wire::EtherCrabWireReadWrite, Debug)]
+#[derive(ethercrab_wire::EtherCrabWireWrite, Debug)]
 #[wire(bytes = 4)]
 struct OutputPdo {
     #[wire(bits = 16)]
-    control_word: u16,
+    control_word: CiA402::ControlWord,
     // control_word: ethercrab::ds402::ControlWord,
     #[wire(bits = 16)]
     speed: i16,
 }
 
-#[derive(ethercrab_wire::EtherCrabWireReadWrite, Debug)]
+#[derive(ethercrab_wire::EtherCrabWireRead, Debug)]
 #[wire(bytes = 6)]
 struct InputPdo {
     #[wire(bits = 16)]
-    status_word: u16,
+    status_word: CiA402::StatusWord,
     #[wire(bits = 16)]
     actual_speed: i16,
     #[wire(bits = 16)]
@@ -69,7 +70,7 @@ enum DriveState {
 /// - Bit 4: Voltage enabled
 /// - Bit 5: Quick stop (enabled low)
 /// - Bit 6: Switch on disabled
-fn parse_state(status: StatusWord) -> DriveState {
+pub fn parse_state(status: StatusWord) -> DriveState {
     let state_ready_to_switch_on = status.contains(StatusWord::READY_TO_SWITCH_ON);
     let state_switched_on = status.contains(StatusWord::SWITCHED_ON);
     let state_operation_enabled = status.contains(StatusWord::OP_ENABLED);
@@ -204,22 +205,30 @@ impl Device for I550 {
             return Ok(());
         }
 
-        let mut foo = OutputPdo::unpack_from_slice(&output)?;
+        // let mut foo = OutputPdo::unpack_from_slice(&output)?;
 
         let bar = InputPdo::unpack_from_slice(&input)?;
-        let control_word =
-            match parse_state(StatusWord::from_bits(bar.status_word).expect("Invalid status word"))
-            {
-                DriveState::SwitchOnDisabled => ControlWord::STATE_SHUTDOWN,
-                DriveState::ReadyToSwitchOn | DriveState::SwitchedOn => {
-                    ControlWord::STATE_ENABLE_OP
-                }
-                DriveState::OperationEnabled => ControlWord::STATE_ENABLE_OP,
-                DriveState::Fault => ControlWord::STATE_FAULT_RESET,
-                _ => ControlWord::STATE_DISABLE_VOLTAGE,
-            };
-        foo.control_word = control_word.bits();
-        foo.speed = 1490;
+        let control_word = CiA402::transition(
+            bar.status_word.parse_state(),
+            CiA402::TransitionAction::Run,
+            false,
+        );
+        // let control_word =
+        //     match parse_state(StatusWord::from_bits(bar.status_word).expect("Invalid status word"))
+        //     {
+        //         DriveState::SwitchOnDisabled => ControlWord::STATE_SHUTDOWN,
+        //         DriveState::ReadyToSwitchOn | DriveState::SwitchedOn => {
+        //             ControlWord::STATE_ENABLE_OP
+        //         }
+        //         DriveState::OperationEnabled => ControlWord::STATE_ENABLE_OP,
+        //         DriveState::Fault => ControlWord::STATE_FAULT_RESET,
+        //         _ => ControlWord::STATE_DISABLE_VOLTAGE,
+        //     };
+        let foo = OutputPdo {
+            control_word,
+            speed: 1490,
+        };
+        foo.pack_to_slice(&mut *output)?;
 
         // let speed = uom::si::i16::AngularVelocity::new::<
         //     uom::si::angular_velocity::revolution_per_minute,
@@ -227,23 +236,16 @@ impl Device for I550 {
 
         // warn!("foo: {:?}", foo);
 
-        foo.pack_to_slice(&mut *output)?;
+        // foo.pack_to_slice(&mut *output)?;
 
         let bar = InputPdo::unpack_from_slice(&input)?;
 
         self.cnt += 1;
 
         if self.cnt % 1000 == 0 {
-            let status_word = ethercrab::ds402::StatusWord::from_bits(bar.status_word);
             warn!("foo: {:?}", foo);
             warn!("bar: {:?}", bar);
-            warn!("status_word: {:?}", status_word);
-            warn!("control_word: {:?}", control_word.bits());
             warn!("output: {:?}", output);
-            warn!(
-                "state: {:?}",
-                parse_state(status_word.expect("Invalid status word"))
-            );
         }
 
         Ok(())
