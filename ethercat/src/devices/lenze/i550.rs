@@ -113,8 +113,27 @@ impl Index for MaxSpeed {
     const SUBINDEX: u8 = 0;
 }
 
+#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
+#[wire(bytes = 4)]
+#[serde(transparent)]
+struct MinSpeed {
+    #[wire(bits = 32)]
+    value: u32,
+}
+impl Default for MinSpeed {
+    fn default() -> Self {
+        Self { value: 0 }
+    }
+}
+impl Index for MinSpeed {
+    const INDEX: u16 = 0x6046;
+    const SUBINDEX: u8 = 1;
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
 struct Config {
+    // lenze i550 manual 5.8.2 Manual setting of the motor data
+    // todo: add the other parameters
     rated_mains_voltage: RatedMainsVoltage,
     #[schemars(description = "Base voltage in volts", range(min = 0, max = 5000))]
     base_voltage: BaseVoltage,
@@ -122,6 +141,8 @@ struct Config {
     base_frequency: BaseFrequency,
     #[schemars(description = "Max speed in RPM", range(min = 0, max = 480000))]
     max_speed: MaxSpeed,
+    #[schemars(description = "Min speed in RPM", range(min = 0, max = 480000))]
+    min_speed: MinSpeed,
 }
 
 pub struct I550 {
@@ -223,7 +244,13 @@ impl Device for I550 {
         device
             .sdo_write_value_index(self.config.read().max_speed)
             .await?;
-
+        // I don't know why max speed is in two different places in i550
+        device
+            .sdo_write(0x6046, 2, self.config.read().max_speed.value)
+            .await?;
+        device
+            .sdo_write_value_index(self.config.read().min_speed)
+            .await?;
         warn!("I550 setup complete");
         Ok(())
     }
@@ -252,7 +279,7 @@ impl Device for I550 {
         );
         let output_pdo = OutputPdo {
             control_word,
-            speed: 1500,
+            speed: 1000,
         };
         output_pdo
             .pack_to_slice(&mut *output)
