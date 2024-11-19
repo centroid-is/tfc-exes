@@ -225,6 +225,23 @@ struct Deceleration {
     denominator: DecelerationDenominator,
 }
 
+#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
+#[wire(bytes = 4)]
+#[serde(transparent)]
+struct StatorResistance {
+    #[wire(bits = 32)]
+    value: u32, // ohms factor 10000
+}
+impl Default for StatorResistance {
+    fn default() -> Self {
+        Self { value: 101565 } // 10.1565 ohms
+    }
+}
+impl Index for StatorResistance {
+    const INDEX: u16 = 0x2C01;
+    const SUBINDEX: u8 = 2;
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
 struct Config {
     // lenze i550 manual 5.8.2 Manual setting of the motor data
@@ -242,6 +259,8 @@ struct Config {
     acceleration: Acceleration,
     #[schemars(description = "Deceleration in RPM/s")]
     deceleration: Deceleration,
+    #[schemars(description = "Stator resistance in factor of 10000 ohms, 101565 is 10.1565 ohms")]
+    stator_resistance: Option<StatorResistance>,
 }
 
 pub struct I550 {
@@ -356,6 +375,9 @@ impl Device for I550 {
         device
             .sdo_write_value_index(self.config.read().acceleration.denominator)
             .await?;
+        if let Some(stator_resistance) = self.config.read().stator_resistance {
+            device.sdo_write_value_index(stator_resistance).await?;
+        }
 
         // device.sdo_write(0x6048, 1, 3000 as u32).await?;
         // device.sdo_write(0x6048, 2, 1 as u16).await?;
