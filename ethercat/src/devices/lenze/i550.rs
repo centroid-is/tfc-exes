@@ -84,7 +84,6 @@ impl Index for BaseVoltage {
 #[serde(transparent)]
 struct BaseFrequency {
     #[wire(bits = 16)]
-    #[schemars(description = "Base frequency in hertz")]
     value: u16,
 }
 impl Default for BaseFrequency {
@@ -97,11 +96,32 @@ impl Index for BaseFrequency {
     const SUBINDEX: u8 = 2;
 }
 
+#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
+#[wire(bytes = 4)]
+#[serde(transparent)]
+struct MaxSpeed {
+    #[wire(bits = 32)]
+    value: u32,
+}
+impl Default for MaxSpeed {
+    fn default() -> Self {
+        Self { value: 6075 }
+    }
+}
+impl Index for MaxSpeed {
+    const INDEX: u16 = 0x6080;
+    const SUBINDEX: u8 = 0;
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
 struct Config {
     rated_mains_voltage: RatedMainsVoltage,
+    #[schemars(description = "Base voltage in volts", range(min = 0, max = 5000))]
     base_voltage: BaseVoltage,
+    #[schemars(description = "Base frequency in hertz", range(min = 0, max = 1500))]
     base_frequency: BaseFrequency,
+    #[schemars(description = "Max speed in RPM", range(min = 0, max = 480000))]
+    max_speed: MaxSpeed,
 }
 
 pub struct I550 {
@@ -199,6 +219,9 @@ impl Device for I550 {
             .await?;
         device
             .sdo_write_value_index(self.config.read().base_frequency)
+            .await?;
+        device
+            .sdo_write_value_index(self.config.read().max_speed)
             .await?;
 
         warn!("I550 setup complete");
