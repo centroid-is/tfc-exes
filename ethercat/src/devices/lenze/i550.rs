@@ -242,6 +242,23 @@ impl Index for StatorResistance {
     const SUBINDEX: u8 = 2;
 }
 
+#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
+#[wire(bytes = 4)]
+#[serde(transparent)]
+struct StatorLeakageInductance {
+    #[wire(bits = 32)]
+    value: u32, // mH factor 1000
+}
+impl Default for StatorLeakageInductance {
+    fn default() -> Self {
+        Self { value: 23566 } // 23.566 mH
+    }
+}
+impl Index for StatorLeakageInductance {
+    const INDEX: u16 = 0x2C01;
+    const SUBINDEX: u8 = 3;
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
 struct Config {
     // lenze i550 manual 5.8.2 Manual setting of the motor data
@@ -261,6 +278,8 @@ struct Config {
     deceleration: Deceleration,
     #[schemars(description = "Stator resistance in factor of 10000 ohms, 101565 is 10.1565 ohms")]
     stator_resistance: Option<StatorResistance>,
+    #[schemars(description = "Stator leakage inductance in factor of 1000 mH, 23566 is 23.566 mH")]
+    stator_leakage_inductance: Option<StatorLeakageInductance>,
 }
 
 pub struct I550 {
