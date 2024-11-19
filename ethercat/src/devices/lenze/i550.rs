@@ -61,108 +61,56 @@ impl Index for RatedMainsVoltage {
     const SUBINDEX: u8 = 0x01;
 }
 
-#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
-#[wire(bytes = 2)]
-#[serde(transparent)]
-struct BaseVoltage {
-    #[wire(bits = 16)]
-    #[schemars(description = "Base voltage in volts")]
-    value: u16,
+macro_rules! define_value_type_internal {
+    (
+        $name:ident,
+        $type:ty,
+        $bytes:expr,
+        $bits:expr,
+        $default:expr,
+        $index:expr,
+        $subindex:expr
+    ) => {
+        #[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
+        #[wire(bytes = $bytes)]
+        #[serde(transparent)]
+        struct $name {
+            #[wire(bits = $bits)]
+            value: $type,
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self { value: $default }
+            }
+        }
+
+        impl Index for $name {
+            const INDEX: u16 = $index;
+            const SUBINDEX: u8 = $subindex;
+        }
+    };
 }
-impl Default for BaseVoltage {
-    fn default() -> Self {
-        Self { value: 400 }
-    }
-}
-impl Index for BaseVoltage {
-    const INDEX: u16 = 0x2B01;
-    const SUBINDEX: u8 = 1;
+macro_rules! define_value_type {
+    ($name:ident, u16, $default:expr, $index:expr, $subindex:expr) => {
+        define_value_type_internal!($name, u16, 2, 16, $default, $index, $subindex);
+    };
+    ($name:ident, u32, $default:expr, $index:expr, $subindex:expr) => {
+        define_value_type_internal!($name, u32, 4, 32, $default, $index, $subindex);
+    };
 }
 
-#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
-#[wire(bytes = 2)]
-#[serde(transparent)]
-struct BaseFrequency {
-    #[wire(bits = 16)]
-    value: u16,
-}
-impl Default for BaseFrequency {
-    fn default() -> Self {
-        Self { value: 50 }
-    }
-}
-impl Index for BaseFrequency {
-    const INDEX: u16 = 0x2B01;
-    const SUBINDEX: u8 = 2;
-}
-
-#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
-#[wire(bytes = 4)]
-#[serde(transparent)]
-struct MaxSpeed {
-    #[wire(bits = 32)]
-    value: u32,
-}
-impl Default for MaxSpeed {
-    fn default() -> Self {
-        Self { value: 6075 }
-    }
-}
-impl Index for MaxSpeed {
-    const INDEX: u16 = 0x6080;
-    const SUBINDEX: u8 = 0;
-}
-
-#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
-#[wire(bytes = 4)]
-#[serde(transparent)]
-struct MinSpeed {
-    #[wire(bits = 32)]
-    value: u32,
-}
-impl Default for MinSpeed {
-    fn default() -> Self {
-        Self { value: 0 }
-    }
-}
-impl Index for MinSpeed {
-    const INDEX: u16 = 0x6046;
-    const SUBINDEX: u8 = 1;
-}
-
-#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
-#[wire(bytes = 4)]
-#[serde(transparent)]
-struct AccelerationNumerator {
-    #[wire(bits = 32)]
-    value: u32, // rpm
-}
-impl Default for AccelerationNumerator {
-    fn default() -> Self {
-        Self { value: 3000 }
-    }
-}
-impl Index for AccelerationNumerator {
-    const INDEX: u16 = 0x6048;
-    const SUBINDEX: u8 = 1;
-}
-
-#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
-#[wire(bytes = 2)]
-#[serde(transparent)]
-struct AccelerationDenominator {
-    #[wire(bits = 16)]
-    value: u16, // seconds
-}
-impl Default for AccelerationDenominator {
-    fn default() -> Self {
-        Self { value: 10 }
-    }
-}
-impl Index for AccelerationDenominator {
-    const INDEX: u16 = 0x6048;
-    const SUBINDEX: u8 = 2;
-}
+define_value_type!(BaseVoltage, u16, 400, 0x2B01, 1); // volts
+define_value_type!(BaseFrequency, u16, 50, 0x2B01, 2); // hertz
+define_value_type!(MaxSpeed, u32, 6075, 0x6080, 0); // rpm
+define_value_type!(MinSpeed, u32, 0, 0x6046, 1); // rpm
+define_value_type!(AccelerationNumerator, u32, 3000, 0x6048, 1); // rpm
+define_value_type!(AccelerationDenominator, u16, 10, 0x6048, 2); // seconds
+                                                                 // btw this is rpm/s both acceleration and deceleration
+define_value_type!(DecelerationNumerator, u32, 3000, 0x6049, 1); // rpm
+define_value_type!(DecelerationDenominator, u16, 10, 0x6049, 2); // seconds
+define_value_type!(StatorResistance, u32, 101565, 0x2C01, 2); // 10.1565 ohms so factor 10000
+define_value_type!(StatorLeakageInductance, u32, 23566, 0x2C01, 3); // 23.566 mH so factor 1000
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
 struct Acceleration {
@@ -178,39 +126,6 @@ struct Acceleration {
     denominator: AccelerationDenominator,
 }
 
-#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
-#[wire(bytes = 4)]
-#[serde(transparent)]
-struct DecelerationNumerator {
-    #[wire(bits = 32)]
-    value: u32, // rpm
-}
-impl Default for DecelerationNumerator {
-    fn default() -> Self {
-        Self { value: 3000 }
-    }
-}
-impl Index for DecelerationNumerator {
-    const INDEX: u16 = 0x6049;
-    const SUBINDEX: u8 = 1;
-}
-#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
-#[wire(bytes = 2)]
-#[serde(transparent)]
-struct DecelerationDenominator {
-    #[wire(bits = 16)]
-    value: u16, // seconds
-}
-impl Default for DecelerationDenominator {
-    fn default() -> Self {
-        Self { value: 10 }
-    }
-}
-impl Index for DecelerationDenominator {
-    const INDEX: u16 = 0x6049;
-    const SUBINDEX: u8 = 2;
-}
-
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
 struct Deceleration {
     #[schemars(
@@ -223,40 +138,6 @@ struct Deceleration {
         range(min = 0, max = 65535) // todo min 1 right?
     )]
     denominator: DecelerationDenominator,
-}
-
-#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
-#[wire(bytes = 4)]
-#[serde(transparent)]
-struct StatorResistance {
-    #[wire(bits = 32)]
-    value: u32, // ohms factor 10000
-}
-impl Default for StatorResistance {
-    fn default() -> Self {
-        Self { value: 101565 } // 10.1565 ohms
-    }
-}
-impl Index for StatorResistance {
-    const INDEX: u16 = 0x2C01;
-    const SUBINDEX: u8 = 2;
-}
-
-#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
-#[wire(bytes = 4)]
-#[serde(transparent)]
-struct StatorLeakageInductance {
-    #[wire(bits = 32)]
-    value: u32, // mH factor 1000
-}
-impl Default for StatorLeakageInductance {
-    fn default() -> Self {
-        Self { value: 23566 } // 23.566 mH
-    }
-}
-impl Index for StatorLeakageInductance {
-    const INDEX: u16 = 0x2C01;
-    const SUBINDEX: u8 = 3;
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
