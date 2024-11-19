@@ -178,6 +178,53 @@ struct Acceleration {
     denominator: AccelerationDenominator,
 }
 
+#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
+#[wire(bytes = 4)]
+#[serde(transparent)]
+struct DecelerationNumerator {
+    #[wire(bits = 32)]
+    value: u32, // rpm
+}
+impl Default for DecelerationNumerator {
+    fn default() -> Self {
+        Self { value: 3000 }
+    }
+}
+impl Index for DecelerationNumerator {
+    const INDEX: u16 = 0x6049;
+    const SUBINDEX: u8 = 1;
+}
+#[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
+#[wire(bytes = 2)]
+#[serde(transparent)]
+struct DecelerationDenominator {
+    #[wire(bits = 16)]
+    value: u16, // seconds
+}
+impl Default for DecelerationDenominator {
+    fn default() -> Self {
+        Self { value: 10 }
+    }
+}
+impl Index for DecelerationDenominator {
+    const INDEX: u16 = 0x6049;
+    const SUBINDEX: u8 = 2;
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
+struct Deceleration {
+    #[schemars(
+        description = "Deceleration numerator in RPM",
+        range(min = 0, max = 2147483647)
+    )]
+    numerator: DecelerationNumerator,
+    #[schemars(
+        description = "Deceleration denominator in seconds",
+        range(min = 0, max = 65535) // todo min 1 right?
+    )]
+    denominator: DecelerationDenominator,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
 struct Config {
     // lenze i550 manual 5.8.2 Manual setting of the motor data
@@ -191,11 +238,10 @@ struct Config {
     max_speed: MaxSpeed,
     #[schemars(description = "Min speed in RPM", range(min = 0, max = 480000))]
     min_speed: MinSpeed,
-    #[schemars(
-        description = "Acceleration in deciseconds",
-        range(min = 0, max = 36000)
-    )]
+    #[schemars(description = "Acceleration in RPM/s")]
     acceleration: Acceleration,
+    #[schemars(description = "Deceleration in RPM/s")]
+    deceleration: Deceleration,
 }
 
 pub struct I550 {
