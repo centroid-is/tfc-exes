@@ -51,14 +51,7 @@ impl Bus {
 
         let main_device = Arc::new(MainDevice::new(
             pdu_loop,
-            Timeouts {
-                state_transition: Duration::from_millis(10000),
-                wait_loop_delay: Duration::from_millis(10000),
-                mailbox_response: Duration::from_millis(10000),
-                mailbox_echo: Duration::from_millis(1000),
-                eeprom: Duration::from_millis(1000),
-                pdu: Duration::from_millis(1000),
-            },
+            Timeouts::default(),
             MainDeviceConfig::default(),
         ));
 
