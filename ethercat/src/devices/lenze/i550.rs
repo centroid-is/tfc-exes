@@ -3,6 +3,7 @@ use crate::devices::device_trait::WriteValueIndex;
 use crate::devices::device_trait::{Device, DeviceInfo};
 use async_trait::async_trait;
 use atomic_refcell::AtomicRefMut;
+use ethercrab::EtherCrabWireSized;
 use ethercrab::{SubDevice, SubDevicePdi, SubDeviceRef};
 use ethercrab_wire::EtherCrabWireRead;
 use ethercrab_wire::EtherCrabWireWrite;
@@ -522,6 +523,21 @@ impl std::fmt::Display for I550Error {
     }
 }
 
+#[derive(ethercrab_wire::EtherCrabWireRead, Debug)]
+#[wire(bytes = 4)]
+struct Inputs {
+    #[wire(bits = 16)]
+    _unused1: u16,
+    #[wire(bits = 7)]
+    inputs: u8,
+    // 0 = digital input terminals are set to HIGH (PNP) level via pull-up resistors.
+    // 1 = digital input terminals are set to LOW (PNP) level via pull-down resistors.
+    #[wire(bits = 1)]
+    interconnection: bool, // Internal interconnection of digital inputs
+    #[wire(bits = 8)]
+    _unused2: u8,
+}
+
 #[derive(ethercrab_wire::EtherCrabWireWrite, Debug)]
 #[wire(bytes = 4)]
 struct OutputPdo {
@@ -533,7 +549,7 @@ struct OutputPdo {
 }
 
 #[derive(ethercrab_wire::EtherCrabWireRead, Debug)]
-#[wire(bytes = 10)]
+#[wire(bytes = 14)]
 struct InputPdo {
     #[wire(bits = 16)]
     status_word: CiA402::StatusWord,
@@ -545,6 +561,8 @@ struct InputPdo {
     current: i16, // deciampere
     #[wire(bits = 16)]
     frequency: i16, // decihertz
+    #[wire(bits = 32)]
+    inputs: Inputs,
 }
 
 #[derive(Debug, Copy, Clone, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema)]
@@ -768,8 +786,12 @@ impl Device for I550 {
             .sdo_write(TX_PDO_MAPPING, 0x05, 0x2ddd0010 as u32)
             .await?; // Actual frequency
 
+        device
+            .sdo_write(TX_PDO_MAPPING, 0x06, 0x60FD0020 as u32) // address 0x60FD, subindex 0x00, length 0x20 = 32 bytes
+            .await?; // Inputs
+
         // Set tx size
-        device.sdo_write(TX_PDO_MAPPING, 0x00, 5 as u8).await?;
+        device.sdo_write(TX_PDO_MAPPING, 0x00, 6 as u8).await?;
 
         // Assign pdo's to mappings
         device
@@ -834,8 +856,12 @@ impl Device for I550 {
             return Ok(());
         }
 
-        if input.len() != 10 {
-            warn!("Input PDO length is not 8");
+        if input.len() != InputPdo::PACKED_LEN {
+            warn!(
+                "Input PDO length is not {}, input length is {}",
+                InputPdo::PACKED_LEN,
+                input.len()
+            );
             return Ok(());
         }
 
