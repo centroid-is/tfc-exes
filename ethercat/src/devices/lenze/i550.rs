@@ -111,6 +111,11 @@ define_value_type!(DecelerationNumerator, u32, 3000, 0x6049, 1); // rpm
 define_value_type!(DecelerationDenominator, u16, 10, 0x6049, 2); // seconds
 define_value_type!(StatorResistance, u32, 101565, 0x2C01, 2); // 10.1565 ohms so factor 10000
 define_value_type!(StatorLeakageInductance, u32, 23566, 0x2C01, 3); // 23.566 mH so factor 1000
+define_value_type!(RatedSpeed, u16, 1450, 0x2C01, 4); // rpm
+define_value_type!(RatedFrequency, u16, 500, 0x2C01, 5); // decihertz
+define_value_type!(RatedPower, u16, 750, 0x2C01, 6); // centiwatts
+define_value_type!(RatedVoltage, u16, 400, 0x2C01, 7); // volts
+define_value_type!(CosinePhi, u16, 80, 0x2C01, 8); // cosine phi factor 100
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
 struct Acceleration {
@@ -161,6 +166,16 @@ struct Config {
     stator_resistance: Option<StatorResistance>,
     #[schemars(description = "Stator leakage inductance in factor of 1000 mH, 23566 is 23.566 mH")]
     stator_leakage_inductance: Option<StatorLeakageInductance>,
+    #[schemars(description = "Rated speed in RPM")]
+    rated_speed: RatedSpeed,
+    #[schemars(description = "Rated frequency in decihertz")]
+    rated_frequency: RatedFrequency,
+    #[schemars(description = "Rated power in centiwatts")]
+    rated_power: RatedPower,
+    #[schemars(description = "Rated voltage in volts")]
+    rated_voltage: RatedVoltage,
+    #[schemars(description = "Cosine phi factor of 100")]
+    cosine_phi: CosinePhi,
 }
 
 pub struct I550 {
