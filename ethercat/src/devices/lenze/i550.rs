@@ -3,6 +3,7 @@ use crate::devices::device_trait::WriteValueIndex;
 use crate::devices::device_trait::{Device, DeviceInfo};
 use async_trait::async_trait;
 use atomic_refcell::AtomicRefMut;
+use bitvec::view::BitView;
 use ethercrab::EtherCrabWireSized;
 use ethercrab::{SubDevice, SubDevicePdi, SubDeviceRef};
 use ethercrab_wire::EtherCrabWireRead;
@@ -21,7 +22,7 @@ static RX_PDO_MAPPING: u16 = 0x1605;
 static TX_PDO_MAPPING: u16 = 0x1A05;
 static BASIC_MOTOR_CONTROL: u16 = 0x2631;
 
-#[derive(EtherCrabWireRead)]
+#[derive(EtherCrabWireRead, PartialEq, Eq)]
 #[repr(u16)]
 enum I550Error {
     None = 0,
@@ -546,10 +547,12 @@ struct OutputPdo {
     // control_word: ethercrab::ds402::ControlWord,
     #[wire(bits = 16)]
     speed: i16,
+    // #[wire(bits = 8)]
+    // output1: bool,
 }
 
 #[derive(ethercrab_wire::EtherCrabWireRead, Debug)]
-#[wire(bytes = 14)]
+#[wire(bytes = 16)]
 struct InputPdo {
     #[wire(bits = 16)]
     status_word: CiA402::StatusWord,
@@ -563,6 +566,8 @@ struct InputPdo {
     frequency: i16, // decihertz
     #[wire(bits = 32)]
     inputs: Inputs,
+    #[wire(bits = 16)]
+    analog_input_1: u16,
 }
 
 #[derive(Debug, Copy, Clone, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema)]
@@ -579,10 +584,64 @@ impl Default for RatedMainsVoltage {
         Self::Veff400
     }
 }
-
 impl Index for RatedMainsVoltage {
     const INDEX: u16 = 0x2540;
     const SUBINDEX: u8 = 0x01;
+}
+
+#[derive(Debug, Copy, Clone, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema)]
+#[repr(u8)]
+enum AnalogInput1 {
+    VDC0To10 = 0,
+    VDC0To5 = 1,
+    VDC2To10 = 2,
+    VDCNeg10ToPos10 = 3,
+    #[allow(non_camel_case_types)]
+    mA4To20 = 4,
+    #[allow(non_camel_case_types)]
+    mA0To20 = 5,
+}
+impl Default for AnalogInput1 {
+    fn default() -> Self {
+        Self::mA4To20
+    }
+}
+impl Index for AnalogInput1 {
+    const INDEX: u16 = 0x2636;
+    const SUBINDEX: u8 = 0x01;
+}
+
+#[derive(EtherCrabWireRead, PartialEq, Eq, Debug)]
+#[wire(bytes = 2)]
+struct AnalogInput1Fault {
+    #[wire(bits = 1)]
+    vdc0_to_10: bool,
+    #[wire(bits = 1)]
+    vdc0_to_5: bool,
+    #[wire(bits = 1)]
+    vdc2_to_10: bool,
+    #[wire(bits = 1)]
+    vdcneg10_to_pos10: bool,
+    #[wire(bits = 1)]
+    mA4_to_20: bool,
+    #[wire(bits = 1)]
+    mA0_to_20: bool,
+    #[wire(bits = 1)]
+    supply24v_ok: bool,
+    #[wire(bits = 1)]
+    calibration_successful: bool,
+    #[wire(bits = 1)]
+    monitor_threshold_exceeded: bool,
+    #[wire(bits = 1)]
+    input_current_too_low: bool,
+    #[wire(bits = 1)]
+    input_voltage_too_low: bool,
+    #[wire(bits = 1, post_skip = 4)]
+    input_voltage_too_high: bool,
+}
+impl Index for AnalogInput1Fault {
+    const INDEX: u16 = 0x2DA4;
+    const SUBINDEX: u8 = 16;
 }
 
 macro_rules! define_value_type_internal {
@@ -712,21 +771,42 @@ struct Config {
     cosine_phi: CosinePhi,
     #[schemars(description = "Max current in percent of rated current, 2000 is 200.0%")]
     max_current: MaxCurrent,
+    #[schemars(description = "Analog input 1 mode")]
+    analog_input_1: AnalogInput1,
 }
 
 pub struct I550 {
     cnt: u128,
     config: ConfMan<Config>,
+    inputs: [tfc::ipc::Signal<bool>; 7],
+    last_inputs: [Option<bool>; 7],
+    log_key: String,
 }
 
 impl I550 {
-    pub fn new(dbus: zbus::Connection, slave_number: u16, alias_address: u16) -> Self {
+    pub fn new(dbus: zbus::Connection, sub_number: u16, alias_address: u16) -> Self {
+        let mut prefix = format!("i550_sub_{sub_number}");
+        if alias_address != 0 {
+            prefix = format!("i550_alias_{alias_address}");
+        }
         Self {
             cnt: 0,
-            config: ConfMan::new(
-                dbus,
-                &format!("i550_slave_{slave_number}_alias_{alias_address}"),
-            ),
+            config: ConfMan::new(dbus.clone(), &prefix),
+            inputs: std::array::from_fn(|idx| {
+                let signal = tfc::ipc::Signal::new(
+                    dbus.clone(),
+                    tfc::ipc::Base::new(format!("{prefix}_DI{}", idx + 1).as_str(), None),
+                );
+                #[cfg(feature = "dbus-expose")]
+                tfc::ipc::dbus::SignalInterface::register(
+                    signal.base(),
+                    dbus.clone(),
+                    signal.subscribe(),
+                );
+                signal
+            }),
+            last_inputs: [None; 7],
+            log_key: prefix,
         }
     }
 }
@@ -754,6 +834,10 @@ impl Device for I550 {
         device
             .sdo_write(RX_PDO_MAPPING, 0x02, 0x60420010 as u32)
             .await?; // set speed
+
+        // device
+        //     .sdo_write(RX_PDO_MAPPING, 0x03, 0x26340208 as u32)
+        //     .await?;
 
         device.sdo_write(RX_PDO_MAPPING, 0x00, 2 as u8).await?;
 
@@ -790,8 +874,12 @@ impl Device for I550 {
             .sdo_write(TX_PDO_MAPPING, 0x06, 0x60FD0020 as u32) // address 0x60FD, subindex 0x00, length 0x20 = 32 bytes
             .await?; // Inputs
 
+        device
+            .sdo_write(TX_PDO_MAPPING, 0x07, 0x2DA40110 as u32)
+            .await?; // Analog input 1
+
         // Set tx size
-        device.sdo_write(TX_PDO_MAPPING, 0x00, 6 as u8).await?;
+        device.sdo_write(TX_PDO_MAPPING, 0x00, 7 as u8).await?;
 
         // Assign pdo's to mappings
         device
@@ -839,6 +927,17 @@ impl Device for I550 {
         if let Some(stator_resistance) = self.config.read().stator_resistance {
             device.sdo_write_value_index(stator_resistance).await?;
         }
+        if let Some(stator_leakage_inductance) = self.config.read().stator_leakage_inductance {
+            device
+                .sdo_write_value_index(stator_leakage_inductance)
+                .await?;
+        }
+        device
+            .sdo_write_value_index(self.config.read().analog_input_1)
+            .await?;
+
+        device.sdo_write(0x2636, 9, 0 as u8).await?;
+        device.sdo_write(0x2636, 10, 1 as u8).await?;
 
         // device.sdo_write(0x6048, 1, 3000 as u32).await?;
         // device.sdo_write(0x6048, 2, 1 as u16).await?;
@@ -875,6 +974,7 @@ impl Device for I550 {
         let output_pdo = OutputPdo {
             control_word,
             speed: 1450,
+            // output1: false,
         };
         output_pdo
             .pack_to_slice(&mut *output)
@@ -882,10 +982,30 @@ impl Device for I550 {
 
         self.cnt += 1;
 
+        let input_bits = input_pdo.inputs.inputs.view_bits::<bitvec::order::Lsb0>();
+        for idx in 0..7 {
+            let bit = input_bits[idx];
+            if self.last_inputs[idx].is_none() || self.last_inputs[idx].unwrap() != bit {
+                let _ = self.inputs[idx].async_send(bit).await.map_err(|e| {
+                    warn!(target: &self.log_key, "Error sending signal: {e}");
+                    e
+                });
+            }
+            self.last_inputs[idx] = Some(bit);
+        }
+
         if self.cnt % 1000 == 0 {
             warn!("output_pdo: {:?}", output_pdo);
             warn!("input_pdo: {:?}", input_pdo);
             warn!("output: {:?}", output);
+            if input_pdo.error == I550Error::AnalogInput1Fault {
+                let fault: [u8; 2] = device
+                    .sdo_read(AnalogInput1Fault::INDEX, AnalogInput1Fault::SUBINDEX)
+                    .await?;
+                let fault = AnalogInput1Fault::unpack_from_slice(&fault)
+                    .expect("Error unpacking analog input 1 fault");
+                warn!("Analog input 1 fault: {:?}", fault);
+            }
         }
 
         Ok(())
