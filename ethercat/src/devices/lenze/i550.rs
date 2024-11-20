@@ -20,6 +20,508 @@ static RX_PDO_MAPPING: u16 = 0x1605;
 static TX_PDO_MAPPING: u16 = 0x1A05;
 static BASIC_MOTOR_CONTROL: u16 = 0x2631;
 
+#[derive(EtherCrabWireRead)]
+#[repr(u16)]
+enum I550Error {
+    None = 0,
+    ContinuousOverCurrent = 0x2250, // CiA: Continuous over current (internal) Fault -
+    ShortCircuitInternal = 0x2320,  // CiA: Short circuit/earth leakage (internal) Fault -
+    ShortCircuitDeviceInternal = 0x2340, // CiA: Short circuit (device internal) Fault -
+    I2tOverload = 0x2350,           // CiA: i²*t overload (thermal state) Fault 0x2D4B:003 (P308.03)
+    ItError = 0x2382,               // I*t error Fault 0x2D40:005 (P135.05)
+    ItWarning = 0x2383,             // I*t warning Warning -
+    ImaxClampRespondedTooOften = 0x2387, // Imax: Clamp responded too often Fault -
+    StallDetectionActive = 0x2388,  // SL-PSM stall detection active Trouble -
+    MaximumCurrentReached = 0x238A, // Maximum current reached Information -
+    MainsPhaseFault = 0x3120,       // Mains phase fault Fault -
+    UpsOperationActive = 0x3180,    // UPS operation active Warning -
+    DcBusOvervoltage = 0x3210,      // DC bus overvoltage Fault -
+    DcBusOvervoltageWarning = 0x3211, // DC bus overvoltage warning Warning -
+    DcBusUndervoltage = 0x3220,     // DC bus undervoltage Trouble -
+    DcBusUndervoltageWarning = 0x3221, // DC bus undervoltage warning Warning -
+    DcBusVoltageTooLowForPowerUp = 0x3222, // DC-bus voltage to low for power up Warning -
+    PowerUnitOvertemperature = 0x4210, // PU: overtemperature fault Fault -
+    HeatSinkTemperatureSensorFault = 0x4280, // Heat sink temperature sensor fault Fault -
+    HeatSinkFanWarning = 0x4281,    // Heat sink fan warning Warning -
+    PowerUnitOvertemperatureWarning = 0x4285, // PU overtemperature warning Warning -
+    MotorTemperatureError = 0x4310, // Motor temperature error Fault 0x2D49:002 (P309.02)
+    TwentyFourVSupplyCritical = 0x5112, // 24 V supply critical Warning -
+    OverloadTwentyFourVSupply = 0x5180, // Overload 24 V supply Warning -
+    OemHardwareIncompatible = 0x5380, // OEM hardware incompatible Fault -
+    InternalFanWarning = 0x618A,    // Internal fan warning Warning -
+    TriggerFunctionsConnectedIncorrectly = 0x6280, // Trigger/functions connected incorrectly Trouble -
+    UserDefinedFault1 = 0x6281,                    // User-defined fault 1 Fault -
+    UserDefinedFault2 = 0x6282,                    // User-defined fault 2 Fault -
+    WarningInvertRotation = 0x6290,                // Warning invert rotation Warning -
+    MaximumAllowedTroublesExceeded = 0x6291,       // Maximuml allowed troubles exceeded Fault -
+    UserDefinedFaultLecom = 0x62A0,                // User-defined fault (LECOM) Fault -
+    NetworkUserFault1 = 0x62A1,                    // Network: user fault 1 Fault -
+    NetworkUserFault2 = 0x62A2,                    // Network: user fault 2 Fault -
+    NetworkWordIn1ConfigurationIncorrect = 0x62B1, // NetworkIN1 configuration incorrect Trouble -
+    LoadErrorIdTag = 0x63A1,                       // CU: load error ID tag Fault -
+    PuLoadErrorIdTag = 0x63A2,                     // PU: load error ID tag Fault -
+    PowerUnitUnknown = 0x63A3,                     // Power unit unknown Fault -
+    AssertionLevelMonitoring = 0x7080,             // Assertion level monitoring (Low/High) Fault -
+    AnalogInput1Fault = 0x7081, // Analog input 1 fault Fault 0x2636:010 (P430.10)
+    AnalogInput2Fault = 0x7082, // Analog input 2 fault Fault 0x2637:010 (P431.10)
+    HtlInputFault = 0x7083,     // HTL input fault No response 0x2641:006 (P416.06)
+    AnalogOutput1Fault = 0x70A1, // Analog output 1 fault Warning -
+    AnalogOutput2Fault = 0x70A2, // Analog output 2 fault Warning -
+    PolePositionIdentificationFault = 0x7121, // Pole position identification fault Fault 0x2C60
+    MotorOvercurrent = 0x7180,  // Motor overcurrent Fault 0x2D46:002 (P353.02)
+    EncoderOpenCircuit = 0x7305, // Encoder open circuit Warning 0x2C45 (P342.00)
+    FeedbackSystemSpeedLimit = 0x7385, // Feedback system: speed limit Warning -
+    MemoryModuleIsFull = 0x7680, // Memory module is full Warning -
+    MemoryModuleNotPresent = 0x7681, // Memory module not present Fault
+    MemoryModuleInvalidUserData = 0x7682, // Memory module: Invalid user data Fault -
+    DataNotComplSavedBeforePowerdown = 0x7684, // Data not compl. saved before powerdown Warning -
+    MemoryModuleInvalidOemData = 0x7689, // Memory module: invalid OEM data Warning -
+    EpmFirmwareVersionIncompatible = 0x7690, // EPM firmware version incompatible Fault -
+    EpmDataFirmwareTypeIncompatible = 0x7691, // EPM data: firmware type incompatible Fault -
+    EpmDataNewFirmwareTypeDetected = 0x7692, // EPM data: new firmware type detected Fault -
+    EpmDataPusizeIncompatible = 0x7693, // EPM data: PU size incompatible Fault -
+    EpmDataNewPusizeDetected = 0x7694, // EPM data: new PU size detected Fault -
+    InvalidParameterChangeoverConfiguration = 0x7695, // Invalid parameter changeover configuration Warning -
+    EpmDataUnknownParameterFound = 0x7696, // EPM data: unknown parameter found Information -
+    ParameterChangesLost = 0x7697,         // Parameter changes lost Fault -
+    NetworkTimeoutExplicitMessage = 0x8112, // Network: timeout explicit message Warning 0x2859:006 (P515.06)
+    NetworkOverallCommunicationTimeout = 0x8114, // Network: overall communication timeout Warning See details for 33044
+    TimeOutPAM = 0x8115,                         // Time-out (PAM) No response 0x2552:004 (P595.04)
+    ModbusTcpMasterTimeOut = 0x8116, // Modbus TCP master time-out Fault 0x2859:008 (P515.08)
+    ModbusTcpKeepAliveTimeOut = 0x8117, // Modbus TCP Keep Alive time-out Fault 0x2859:009 (P515.09)
+    CanBusOff = 0x8182,              // CAN: bus off Trouble 0x2857:010
+    CanWarning = 0x8183,             // CAN: warning Warning 0x2857:011
+    CanHeartbeatTimeOutConsumer1 = 0x8184, // CAN: heartbeat time-out consumer 1 Fault 0x2857:005
+    CanHeartbeatTimeOutConsumer2 = 0x8185, // CAN: heartbeat time-out consumer 2 Fault 0x2857:006
+    CanHeartbeatTimeOutConsumer3 = 0x8186, // CAN: heartbeat time-out consumer 3 Fault 0x2857:007
+    CanHeartbeatTimeOutConsumer4 = 0x8187, // CAN: heartbeat time-out consumer 4 Fault 0x2857:008
+    NetworkWatchdogTimeout = 0x8190, // Network: watchdog timeout Trouble See details for 33168
+    NetworkDisruptionOfCyclicDataExchange = 0x8191, // Network: disruption of cyclic data exchange No response 0x2859:002 (P515.02)
+    NetworkInitialisationError = 0x8192, // Network: initialisation error Trouble See details for 33170
+    NetworkInvalidCyclicProcessData = 0x8193, // Network: invalid cyclic process data Trouble See details for 33171
+    ModbusNetworkTimeOut = 0x81A1,            // Modbus: network time-out Fault 0x2858:001 (P515.01)
+    ModbusIncorrectRequestByMaster = 0x81A2,  // Modbus: incorrect request by master Warning -
+    NetworkCommunicationFaulty = 0x81B0,      // Network communication faulty Trouble -
+    PowerlinkLossOfSoc = 0x8265,              // POWERLINK: Loss of SoC Trouble 0x2859:011
+    PowerlinkCrcError = 0x8266,               // POWERLINK: CRC error Trouble 0x2859:010
+    NetworkPdoMappingError = 0x8286, // Network: PDO mapping error Trouble See details for 33414
+    CanRpdo1TimeOut = 0x8291,        // CAN: RPDO1 time-out Fault 0x2857:001
+    CanRpdo2TimeOut = 0x8292,        // CAN: RPDO2 time-out Fault 0x2857:002
+    CanRpdo3TimeOut = 0x8293,        // CAN: RPDO3 time-out Fault 0x2857:003
+    TorqueLimitReached = 0x8311,     // Torque limit reached No response 0x2D67:001 (P329.01)
+    FunctionNotAllowedInSelectedOperatingMode = 0x8380, // Function not allowed in selected operating mode Warning -
+    KeypadRemoved = 0x9080,                             // Keypad removed Fault -
+    BrakeResistorOverloadFault = 0xFF02, // Brake resistor: overload fault Fault 0x2550:011 (P707.11)
+    SafeTorqueOffIsLocked = 0xFF05,      // Safe Torque Off is locked Fault -
+    MotorOverspeed = 0xFF06,             // Motor overspeed Fault 0x2D44:002 (P350.02)
+    MotorPhaseMissing = 0xFF09,          // Motor phase missing No response 0x2D45:001 (P310.01)
+    MotorPhaseFailurePhaseU = 0xFF0A, // Motor phase failure phase U No response 0x2D45:001 (P310.01)
+    MotorPhaseFailurePhaseV = 0xFF0B, // Motor phase failure phase V No response 0x2D45:001 (P310.01)
+    MotorPhaseFailurePhaseW = 0xFF0C, // Motor phase failure phase W No response 0x2D45:001 (P310.01)
+    MotorParameterIdentificationFault = 0xFF19, // Motor parameter identification fault Fault -
+    FmfError = 0xFF1F,                // FMF Error Fault -
+    BrakeResistorOverloadWarning = 0xFF36, // Brake resistor: overload warning Warning 0x2550:010 (P707.10)
+    AutomaticStartDisabled = 0xFF37,       // Automatic start disabled Fault -
+    LoadLossDetected = 0xFF38,             // Load loss detected No response 0x4006:003 (P710.03)
+    MotorOverload = 0xFF39,                // Motor overload No response 0x4007:003
+    MaximumMotorFrequencyReached = 0xFF56, // Maximum motor frequency reached Warning -
+    ManualModeDeactivated = 0xFF5A,        // Manual mode deactivated Warning -
+    ManualModeActivated = 0xFF5B,          // Manual mode activated Warning
+    ManualModeTimeOut = 0xFF5C,            // Manual mode time-out Fault -
+    WrongPassword = 0xFF71,                // Wrong password Warning -
+    Warning = 0xFF72,                      // Warning Warning -
+    FatalError = 0xFF73,                   // Fatal Error Fault -
+    PowerUnitFatalError = 0xFF74,          // Power unit fatal error Fault -
+    KeypadFullControlActive = 0xFF85,      // Keypad full control active Warning -
+    AutoTuningActive = 0xFF86,             // Auto-tuning active Warning -
+    AutoTuningCancelled = 0xFF87,          // Auto-tuning cancelled Fault
+}
+impl std::fmt::Debug for I550Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "None"),
+            Self::ContinuousOverCurrent => {
+                write!(f, "CiA: Continuous over current (internal) Fault")
+            }
+            Self::ShortCircuitInternal => {
+                write!(f, "CiA: Short circuit/earth leakage (internal) Fault")
+            }
+            Self::ShortCircuitDeviceInternal => {
+                write!(f, "CiA: Short circuit (device internal) Fault")
+            }
+            Self::I2tOverload => {
+                write!(
+                    f,
+                    "CiA: i²*t overload (thermal state) Fault 0x2D4B:003 (P308.03)"
+                )
+            }
+            Self::ItError => {
+                write!(f, "I*t error Fault 0x2D40:005 (P135.05)")
+            }
+            Self::ItWarning => {
+                write!(f, "I*t warning Warning")
+            }
+            Self::ImaxClampRespondedTooOften => {
+                write!(f, "Imax: Clamp responded too often Fault")
+            }
+            Self::StallDetectionActive => {
+                write!(f, "SL-PSM stall detection active Trouble")
+            }
+            Self::MaximumCurrentReached => {
+                write!(f, "Maximum current reached Information")
+            }
+            Self::MainsPhaseFault => {
+                write!(f, "Mains phase fault Fault")
+            }
+            Self::UpsOperationActive => {
+                write!(f, "UPS operation active Warning")
+            }
+            Self::DcBusOvervoltage => {
+                write!(f, "DC bus overvoltage Fault")
+            }
+            Self::DcBusOvervoltageWarning => {
+                write!(f, "DC bus overvoltage warning Warning")
+            }
+            Self::DcBusUndervoltage => {
+                write!(f, "DC bus undervoltage Trouble")
+            }
+            Self::DcBusUndervoltageWarning => {
+                write!(f, "DC bus undervoltage warning Warning")
+            }
+            Self::DcBusVoltageTooLowForPowerUp => {
+                write!(f, "DC-bus voltage too low for power up Warning")
+            }
+            Self::PowerUnitOvertemperature => {
+                write!(f, "PU: overtemperature fault Fault")
+            }
+            Self::HeatSinkTemperatureSensorFault => {
+                write!(f, "Heat sink temperature sensor fault Fault")
+            }
+            Self::HeatSinkFanWarning => {
+                write!(f, "Heat sink fan warning Warning")
+            }
+            Self::PowerUnitOvertemperatureWarning => {
+                write!(f, "PU overtemperature warning Warning")
+            }
+            Self::MotorTemperatureError => {
+                write!(f, "Motor temperature error Fault 0x2D49:002 (P309.02)")
+            }
+            Self::TwentyFourVSupplyCritical => {
+                write!(f, "24 V supply critical Warning")
+            }
+            Self::OverloadTwentyFourVSupply => {
+                write!(f, "Overload 24 V supply Warning")
+            }
+            Self::OemHardwareIncompatible => {
+                write!(f, "OEM hardware incompatible Fault")
+            }
+            Self::InternalFanWarning => {
+                write!(f, "Internal fan warning Warning")
+            }
+            Self::TriggerFunctionsConnectedIncorrectly => {
+                write!(f, "Trigger/functions connected incorrectly Trouble")
+            }
+            Self::UserDefinedFault1 => {
+                write!(f, "User-defined fault 1 Fault")
+            }
+            Self::UserDefinedFault2 => {
+                write!(f, "User-defined fault 2 Fault")
+            }
+            Self::WarningInvertRotation => {
+                write!(f, "Warning invert rotation Warning")
+            }
+            Self::MaximumAllowedTroublesExceeded => {
+                write!(f, "Maximum allowed troubles exceeded Fault")
+            }
+            Self::UserDefinedFaultLecom => {
+                write!(f, "User-defined fault (LECOM) Fault")
+            }
+            Self::NetworkUserFault1 => {
+                write!(f, "Network: user fault 1 Fault")
+            }
+            Self::NetworkUserFault2 => {
+                write!(f, "Network: user fault 2 Fault")
+            }
+            Self::NetworkWordIn1ConfigurationIncorrect => {
+                write!(f, "Network: IN1 configuration incorrect Trouble")
+            }
+            Self::LoadErrorIdTag => {
+                write!(f, "CU: load error ID tag Fault")
+            }
+            Self::PuLoadErrorIdTag => {
+                write!(f, "PU: load error ID tag Fault")
+            }
+            Self::PowerUnitUnknown => {
+                write!(f, "Power unit unknown Fault")
+            }
+            Self::AssertionLevelMonitoring => {
+                write!(f, "Assertion level monitoring (Low/High) Fault")
+            }
+            Self::AnalogInput1Fault => {
+                write!(f, "Analog input 1 fault Fault 0x2636:010 (P430.10)")
+            }
+            Self::AnalogInput2Fault => {
+                write!(f, "Analog input 2 fault Fault 0x2637:010 (P431.10)")
+            }
+            Self::HtlInputFault => {
+                write!(f, "HTL input fault No response 0x2641:006 (P416.06)")
+            }
+            Self::AnalogOutput1Fault => {
+                write!(f, "Analog output 1 fault Warning")
+            }
+            Self::AnalogOutput2Fault => {
+                write!(f, "Analog output 2 fault Warning")
+            }
+            Self::PolePositionIdentificationFault => {
+                write!(f, "Pole position identification fault Fault 0x2C60")
+            }
+            Self::MotorOvercurrent => {
+                write!(f, "Motor overcurrent Fault 0x2D46:002 (P353.02)")
+            }
+            Self::EncoderOpenCircuit => {
+                write!(f, "Encoder open circuit Warning 0x2C45 (P342.00)")
+            }
+            Self::FeedbackSystemSpeedLimit => {
+                write!(f, "Feedback system: speed limit Warning")
+            }
+            Self::MemoryModuleIsFull => {
+                write!(f, "Memory module is full Warning")
+            }
+            Self::MemoryModuleNotPresent => {
+                write!(f, "Memory module not present Fault")
+            }
+            Self::MemoryModuleInvalidUserData => {
+                write!(f, "Memory module: Invalid user data Fault")
+            }
+            Self::DataNotComplSavedBeforePowerdown => {
+                write!(f, "Data not completely saved before powerdown Warning")
+            }
+            Self::MemoryModuleInvalidOemData => {
+                write!(f, "Memory module: invalid OEM data Warning")
+            }
+            Self::EpmFirmwareVersionIncompatible => {
+                write!(f, "EPM firmware version incompatible Fault")
+            }
+            Self::EpmDataFirmwareTypeIncompatible => {
+                write!(f, "EPM data: firmware type incompatible Fault")
+            }
+            Self::EpmDataNewFirmwareTypeDetected => {
+                write!(f, "EPM data: new firmware type detected Fault")
+            }
+            Self::EpmDataPusizeIncompatible => {
+                write!(f, "EPM data: PU size incompatible Fault")
+            }
+            Self::EpmDataNewPusizeDetected => {
+                write!(f, "EPM data: new PU size detected Fault")
+            }
+            Self::InvalidParameterChangeoverConfiguration => {
+                write!(f, "Invalid parameter changeover configuration Warning")
+            }
+            Self::EpmDataUnknownParameterFound => {
+                write!(f, "EPM data: unknown parameter found Information")
+            }
+            Self::ParameterChangesLost => {
+                write!(f, "Parameter changes lost Fault")
+            }
+            Self::NetworkTimeoutExplicitMessage => {
+                write!(
+                    f,
+                    "Network: timeout explicit message Warning 0x2859:006 (P515.06)"
+                )
+            }
+            Self::NetworkOverallCommunicationTimeout => {
+                write!(
+                    f,
+                    "Network: overall communication timeout Warning See details for 33044"
+                )
+            }
+            Self::TimeOutPAM => {
+                write!(f, "Time-out (PAM) No response 0x2552:004 (P595.04)")
+            }
+            Self::ModbusTcpMasterTimeOut => {
+                write!(f, "Modbus TCP master time-out Fault 0x2859:008 (P515.08)")
+            }
+            Self::ModbusTcpKeepAliveTimeOut => {
+                write!(
+                    f,
+                    "Modbus TCP Keep Alive time-out Fault 0x2859:009 (P515.09)"
+                )
+            }
+            Self::CanBusOff => {
+                write!(f, "CAN: bus off Trouble 0x2857:010")
+            }
+            Self::CanWarning => {
+                write!(f, "CAN: warning Warning 0x2857:011")
+            }
+            Self::CanHeartbeatTimeOutConsumer1 => {
+                write!(f, "CAN: heartbeat time-out consumer 1 Fault 0x2857:005")
+            }
+            Self::CanHeartbeatTimeOutConsumer2 => {
+                write!(f, "CAN: heartbeat time-out consumer 2 Fault 0x2857:006")
+            }
+            Self::CanHeartbeatTimeOutConsumer3 => {
+                write!(f, "CAN: heartbeat time-out consumer 3 Fault 0x2857:007")
+            }
+            Self::CanHeartbeatTimeOutConsumer4 => {
+                write!(f, "CAN: heartbeat time-out consumer 4 Fault 0x2857:008")
+            }
+            Self::NetworkWatchdogTimeout => {
+                write!(f, "Network: watchdog timeout Trouble See details for 33168")
+            }
+            Self::NetworkDisruptionOfCyclicDataExchange => {
+                write!(
+                    f,
+                    "Network: disruption of cyclic data exchange No response 0x2859:002 (P515.02)"
+                )
+            }
+            Self::NetworkInitialisationError => {
+                write!(
+                    f,
+                    "Network: initialization error Trouble See details for 33170"
+                )
+            }
+            Self::NetworkInvalidCyclicProcessData => {
+                write!(
+                    f,
+                    "Network: invalid cyclic process data Trouble See details for 33171"
+                )
+            }
+            Self::ModbusNetworkTimeOut => {
+                write!(f, "Modbus: network time-out Fault 0x2858:001 (P515.01)")
+            }
+            Self::ModbusIncorrectRequestByMaster => {
+                write!(f, "Modbus: incorrect request by master Warning")
+            }
+            Self::NetworkCommunicationFaulty => {
+                write!(f, "Network communication faulty Trouble")
+            }
+            Self::PowerlinkLossOfSoc => {
+                write!(f, "POWERLINK: Loss of SoC Trouble 0x2859:011")
+            }
+            Self::PowerlinkCrcError => {
+                write!(f, "POWERLINK: CRC error Trouble 0x2859:010")
+            }
+            Self::NetworkPdoMappingError => {
+                write!(
+                    f,
+                    "Network: PDO mapping error Trouble See details for 33414"
+                )
+            }
+            Self::CanRpdo1TimeOut => {
+                write!(f, "CAN: RPDO1 time-out Fault 0x2857:001")
+            }
+            Self::CanRpdo2TimeOut => {
+                write!(f, "CAN: RPDO2 time-out Fault 0x2857:002")
+            }
+            Self::CanRpdo3TimeOut => {
+                write!(f, "CAN: RPDO3 time-out Fault 0x2857:003")
+            }
+            Self::TorqueLimitReached => {
+                write!(f, "Torque limit reached No response 0x2D67:001 (P329.01)")
+            }
+            Self::FunctionNotAllowedInSelectedOperatingMode => {
+                write!(f, "Function not allowed in selected operating mode Warning")
+            }
+            Self::KeypadRemoved => {
+                write!(f, "Keypad removed Fault")
+            }
+            Self::BrakeResistorOverloadFault => {
+                write!(
+                    f,
+                    "Brake resistor: overload fault Fault 0x2550:011 (P707.11)"
+                )
+            }
+            Self::SafeTorqueOffIsLocked => {
+                write!(f, "Safe Torque Off is locked Fault")
+            }
+            Self::MotorOverspeed => {
+                write!(f, "Motor overspeed Fault 0x2D44:002 (P350.02)")
+            }
+            Self::MotorPhaseMissing => {
+                write!(f, "Motor phase missing No response 0x2D45:001 (P310.01)")
+            }
+            Self::MotorPhaseFailurePhaseU => {
+                write!(
+                    f,
+                    "Motor phase failure phase U No response 0x2D45:001 (P310.01)"
+                )
+            }
+            Self::MotorPhaseFailurePhaseV => {
+                write!(
+                    f,
+                    "Motor phase failure phase V No response 0x2D45:001 (P310.01)"
+                )
+            }
+            Self::MotorPhaseFailurePhaseW => {
+                write!(
+                    f,
+                    "Motor phase failure phase W No response 0x2D45:001 (P310.01)"
+                )
+            }
+            Self::MotorParameterIdentificationFault => {
+                write!(f, "Motor parameter identification fault Fault")
+            }
+            Self::FmfError => {
+                write!(f, "FMF Error Fault")
+            }
+            Self::BrakeResistorOverloadWarning => {
+                write!(
+                    f,
+                    "Brake resistor: overload warning Warning 0x2550:010 (P707.10)"
+                )
+            }
+            Self::AutomaticStartDisabled => {
+                write!(f, "Automatic start disabled Fault")
+            }
+            Self::LoadLossDetected => {
+                write!(f, "Load loss detected No response 0x4006:003 (P710.03)")
+            }
+            Self::MotorOverload => {
+                write!(f, "Motor overload No response 0x4007:003")
+            }
+            Self::MaximumMotorFrequencyReached => {
+                write!(f, "Maximum motor frequency reached Warning")
+            }
+            Self::ManualModeDeactivated => {
+                write!(f, "Manual mode deactivated Warning")
+            }
+            Self::ManualModeActivated => {
+                write!(f, "Manual mode activated Warning")
+            }
+            Self::ManualModeTimeOut => {
+                write!(f, "Manual mode time-out Fault")
+            }
+            Self::WrongPassword => {
+                write!(f, "Wrong password Warning")
+            }
+            Self::Warning => {
+                write!(f, "Warning Warning 0xFF72")
+            }
+            Self::FatalError => {
+                write!(f, "Fatal Error Fault")
+            }
+            Self::PowerUnitFatalError => {
+                write!(f, "Power unit fatal error Fault")
+            }
+            Self::KeypadFullControlActive => {
+                write!(f, "Keypad full control active Warning")
+            }
+            Self::AutoTuningActive => {
+                write!(f, "Auto-tuning active Warning")
+            }
+            Self::AutoTuningCancelled => {
+                write!(f, "Auto-tuning cancelled Fault")
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for I550Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 #[derive(ethercrab_wire::EtherCrabWireWrite, Debug)]
 #[wire(bytes = 4)]
 struct OutputPdo {
@@ -31,14 +533,18 @@ struct OutputPdo {
 }
 
 #[derive(ethercrab_wire::EtherCrabWireRead, Debug)]
-#[wire(bytes = 6)]
+#[wire(bytes = 10)]
 struct InputPdo {
     #[wire(bits = 16)]
     status_word: CiA402::StatusWord,
     #[wire(bits = 16)]
     actual_speed: i16,
     #[wire(bits = 16)]
-    error: i16,
+    error: I550Error,
+    #[wire(bits = 16)]
+    current: i16, // deciampere
+    #[wire(bits = 16)]
+    frequency: i16, // decihertz
 }
 
 #[derive(Debug, Copy, Clone, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema)]
@@ -255,9 +761,15 @@ impl Device for I550 {
         device
             .sdo_write(TX_PDO_MAPPING, 0x03, 0x603F0010 as u32)
             .await?; // Error
+        device
+            .sdo_write(TX_PDO_MAPPING, 0x04, 0x2d880010 as u32)
+            .await?; // Actual current
+        device
+            .sdo_write(TX_PDO_MAPPING, 0x05, 0x2ddd0010 as u32)
+            .await?; // Actual frequency
 
         // Set tx size
-        device.sdo_write(TX_PDO_MAPPING, 0x00, 3 as u8).await?;
+        device.sdo_write(TX_PDO_MAPPING, 0x00, 5 as u8).await?;
 
         // Assign pdo's to mappings
         device
@@ -322,8 +834,8 @@ impl Device for I550 {
             return Ok(());
         }
 
-        if input.len() != 6 {
-            warn!("Input PDO length is not 6");
+        if input.len() != 10 {
+            warn!("Input PDO length is not 8");
             return Ok(());
         }
 
@@ -336,7 +848,7 @@ impl Device for I550 {
         );
         let output_pdo = OutputPdo {
             control_word,
-            speed: 1000,
+            speed: 1450,
         };
         output_pdo
             .pack_to_slice(&mut *output)
