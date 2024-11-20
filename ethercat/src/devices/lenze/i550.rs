@@ -12,6 +12,7 @@ use log::warn;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::sync::Arc;
 use tfc::confman::ConfMan;
 
 use crate::devices::CiA402;
@@ -773,6 +774,8 @@ struct Config {
     max_current: MaxCurrent,
     #[schemars(description = "Analog input 1 mode")]
     analog_input_1: AnalogInput1,
+    #[schemars(description = "Default speed ratio, -100.0% to 100.0%")]
+    speedratio: f64,
 }
 
 pub struct I550 {
@@ -780,7 +783,34 @@ pub struct I550 {
     config: ConfMan<Config>,
     inputs: [tfc::ipc::Signal<bool>; 7],
     last_inputs: [Option<bool>; 7],
+    speedratio: tfc::ipc::Slot<f64>,
+    rpm_setpoint: Arc<tokio::sync::RwLock<i16>>,
+    run: tfc::ipc::Slot<bool>,
+    run_cached: bool,
     log_key: String,
+}
+
+fn map(value: f64, in_min: f64, in_max: f64, out_min: f64, out_max: f64) -> f64 {
+    let clamped_value = value.clamp(in_min, in_max);
+    (clamped_value - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
+}
+fn percentage_to_rpm(percentage: f64, min_rpm: MinSpeed, max_rpm: MaxSpeed) -> i16 {
+    if percentage.abs() < 1.0 {
+        return 0;
+    }
+
+    let mapped = map(
+        percentage.abs(),
+        1.0,
+        100.0,
+        min_rpm.value as f64,
+        max_rpm.value as f64,
+    );
+
+    if percentage <= -1.0 {
+        return (-1.0 * mapped) as i16;
+    }
+    mapped as i16
 }
 
 impl I550 {
@@ -789,9 +819,39 @@ impl I550 {
         if alias_address != 0 {
             prefix = format!("i550_alias_{alias_address}");
         }
+        let config: ConfMan<Config> = ConfMan::new(dbus.clone(), &prefix);
+        let speedratio: tfc::ipc::Slot<f64> = tfc::ipc::Slot::new(
+            dbus.clone(),
+            tfc::ipc::Base::new(format!("{prefix}_speedratio").as_str(), None),
+        );
+        #[cfg(feature = "dbus-expose")]
+        tfc::ipc::dbus::SlotInterface::register(
+            speedratio.base(),
+            dbus.clone(),
+            speedratio.channel("dbus"),
+        );
+        let mut speedratio_channel = speedratio.subscribe();
+        let min_speed = config.read().min_speed; // todo this is not updatable ...
+        let max_speed = config.read().max_speed;
+        let rpm_setpoint = Arc::new(tokio::sync::RwLock::new(percentage_to_rpm(
+            config.read().speedratio,
+            min_speed,
+            max_speed,
+        )));
+        let rpm_setpoint_cp = Arc::clone(&rpm_setpoint);
+        tokio::spawn(async move {
+            while let Ok(()) = speedratio_channel.changed().await {
+                let speedratio = *speedratio_channel.borrow_and_update();
+                if let Some(speedratio) = speedratio {
+                    *rpm_setpoint_cp.write().await =
+                        percentage_to_rpm(speedratio, min_speed, max_speed);
+                }
+            }
+        });
+
         Self {
             cnt: 0,
-            config: ConfMan::new(dbus.clone(), &prefix),
+            config,
             inputs: std::array::from_fn(|idx| {
                 let signal = tfc::ipc::Signal::new(
                     dbus.clone(),
@@ -806,6 +866,13 @@ impl I550 {
                 signal
             }),
             last_inputs: [None; 7],
+            speedratio,
+            rpm_setpoint,
+            run: tfc::ipc::Slot::new(
+                dbus.clone(),
+                tfc::ipc::Base::new(format!("{prefix}_run").as_str(), None),
+            ),
+            run_cached: false,
             log_key: prefix,
         }
     }
@@ -973,7 +1040,7 @@ impl Device for I550 {
         );
         let output_pdo = OutputPdo {
             control_word,
-            speed: 1450,
+            speed: *self.rpm_setpoint.read().await,
             // output1: false,
         };
         output_pdo
