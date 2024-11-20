@@ -115,7 +115,11 @@ define_value_type!(RatedSpeed, u16, 1450, 0x2C01, 4); // rpm
 define_value_type!(RatedFrequency, u16, 500, 0x2C01, 5); // decihertz
 define_value_type!(RatedPower, u16, 750, 0x2C01, 6); // centiwatts
 define_value_type!(RatedVoltage, u16, 400, 0x2C01, 7); // volts
+define_value_type!(RatedCurrent, u32, 1700, 0x6075, 0); // milliampere
 define_value_type!(CosinePhi, u16, 80, 0x2C01, 8); // cosine phi factor 100
+define_value_type!(MaxCurrent, u16, 2000, 0x6073, 0); // percent factor 10 2000 is 200.0%
+
+// todo rotor time constant
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Default)]
 struct Acceleration {
@@ -162,9 +166,13 @@ struct Config {
     acceleration: Acceleration,
     #[schemars(description = "Deceleration in RPM/s")]
     deceleration: Deceleration,
-    #[schemars(description = "Stator resistance in factor of 10000 ohms, 101565 is 10.1565 ohms")]
+    #[schemars(
+        description = "Stator resistance in factor of 10000 ohms, 101565 is 10.1565 ohms. Typical for 120Hz Lenze = 1100mOhm"
+    )]
     stator_resistance: Option<StatorResistance>,
-    #[schemars(description = "Stator leakage inductance in factor of 1000 mH, 23566 is 23.566 mH")]
+    #[schemars(
+        description = "Stator leakage inductance in factor of 1000 mH, 23566 is 23.566 mH. Typical for 120Hz Lenze = 61mH"
+    )]
     stator_leakage_inductance: Option<StatorLeakageInductance>,
     #[schemars(description = "Rated speed in RPM")]
     rated_speed: RatedSpeed,
@@ -174,8 +182,12 @@ struct Config {
     rated_power: RatedPower,
     #[schemars(description = "Rated voltage in volts")]
     rated_voltage: RatedVoltage,
+    #[schemars(description = "Rated current in milliampere")]
+    rated_current: RatedCurrent,
     #[schemars(description = "Cosine phi factor of 100")]
     cosine_phi: CosinePhi,
+    #[schemars(description = "Max current in percent of rated current, 2000 is 200.0%")]
+    max_current: MaxCurrent,
 }
 
 pub struct I550 {
