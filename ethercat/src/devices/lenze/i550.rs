@@ -1022,12 +1022,9 @@ impl Device for I550 {
         device
             .sdo_write_value_index(self.config.read().analog_input_1)
             .await?;
+        // analog input 1 no response on error
+        device.sdo_write(0x2636, 10, 0 as u8).await?;
 
-        device.sdo_write(0x2636, 9, 0 as u8).await?;
-        device.sdo_write(0x2636, 10, 1 as u8).await?;
-
-        // device.sdo_write(0x6048, 1, 3000 as u32).await?;
-        // device.sdo_write(0x6048, 2, 1 as u16).await?;
         warn!("I550 setup complete");
         Ok(())
     }
@@ -1096,18 +1093,18 @@ impl Device for I550 {
             self.last_inputs[idx] = Some(bit);
         }
 
-        if self.cnt % 1000 == 0 {
+        if self.cnt % 10000 == 0 {
             warn!("output_pdo: {:?}", output_pdo);
             warn!("input_pdo: {:?}", input_pdo);
             warn!("output: {:?}", output);
-            if input_pdo.error == I550Error::AnalogInput1Fault {
-                let fault: [u8; 2] = device
-                    .sdo_read(AnalogInput1Fault::INDEX, AnalogInput1Fault::SUBINDEX)
-                    .await?;
-                let fault = AnalogInput1Fault::unpack_from_slice(&fault)
-                    .expect("Error unpacking analog input 1 fault");
-                warn!("Analog input 1 fault: {:?}", fault);
-            }
+            // if input_pdo.error == I550Error::AnalogInput1Fault {
+            //     let fault: [u8; 2] = device
+            //         .sdo_read(AnalogInput1Fault::INDEX, AnalogInput1Fault::SUBINDEX)
+            //         .await?;
+            //     let fault = AnalogInput1Fault::unpack_from_slice(&fault)
+            //         .expect("Error unpacking analog input 1 fault");
+            //     warn!("Analog input 1 fault: {:?}", fault);
+            // }
         }
 
         Ok(())

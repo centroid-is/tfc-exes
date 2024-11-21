@@ -98,7 +98,7 @@ impl ControlWord {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum State {
     NotReadyToSwitchOn = 1,
     SwitchOnDisabled = 2,
