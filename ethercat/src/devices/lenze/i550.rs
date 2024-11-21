@@ -786,7 +786,7 @@ pub struct I550 {
     speedratio: tfc::ipc::Slot<f64>,
     rpm_setpoint: Arc<std::sync::atomic::AtomicI16>,
     run: tfc::ipc::Slot<bool>,
-    run_cached: bool,
+    run_cached: Arc<std::sync::atomic::AtomicBool>,
     log_key: String,
 }
 
@@ -839,6 +839,7 @@ impl I550 {
             max_speed,
         )));
         let rpm_setpoint_cp = Arc::clone(&rpm_setpoint);
+        let log_key_cp = prefix.clone();
         tokio::spawn(async move {
             while let Ok(()) = speedratio_channel.changed().await {
                 let speedratio = *speedratio_channel.borrow_and_update();
@@ -849,6 +850,26 @@ impl I550 {
                     );
                 }
             }
+            warn!(target: &log_key_cp, "speedratio channel closed");
+        });
+
+        let run = tfc::ipc::Slot::new(
+            dbus.clone(),
+            tfc::ipc::Base::new(format!("{prefix}_run").as_str(), None),
+        );
+        #[cfg(feature = "dbus-expose")]
+        tfc::ipc::dbus::SlotInterface::register(run.base(), dbus.clone(), run.channel("dbus"));
+        let run_cached = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let run_cached_cp = Arc::clone(&run_cached);
+        let mut run_channel = run.subscribe();
+        let log_key_cp = prefix.clone();
+        tokio::spawn(async move {
+            while let Ok(()) = run_channel.changed().await {
+                if let Some(run) = *run_channel.borrow_and_update() {
+                    run_cached_cp.store(run, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            warn!(target: &log_key_cp, "run channel closed");
         });
 
         Self {
@@ -870,11 +891,8 @@ impl I550 {
             last_inputs: [None; 7],
             speedratio,
             rpm_setpoint,
-            run: tfc::ipc::Slot::new(
-                dbus.clone(),
-                tfc::ipc::Base::new(format!("{prefix}_run").as_str(), None),
-            ),
-            run_cached: false,
+            run,
+            run_cached,
             log_key: prefix,
         }
     }
@@ -1038,12 +1056,23 @@ impl Device for I550 {
         }
 
         let input_pdo = InputPdo::unpack_from_slice(&input).expect("Error unpacking input PDO");
+        let current_state = input_pdo.status_word.parse_state();
+        let auto_reset_allowed = true;
 
-        let control_word = CiA402::transition(
-            input_pdo.status_word.parse_state(),
-            CiA402::TransitionAction::Run,
-            true,
+        let mut control_word = CiA402::transition(
+            current_state.clone(),
+            CiA402::TransitionAction::Stop,
+            auto_reset_allowed,
         );
+        let setpoint = self.rpm_setpoint.load(std::sync::atomic::Ordering::Relaxed);
+        if setpoint != 0 && self.run_cached.load(std::sync::atomic::Ordering::Relaxed) {
+            control_word = CiA402::transition(
+                current_state,
+                CiA402::TransitionAction::Run,
+                auto_reset_allowed,
+            );
+        }
+
         let output_pdo = OutputPdo {
             control_word,
             speed: self.rpm_setpoint.load(std::sync::atomic::Ordering::Relaxed),
