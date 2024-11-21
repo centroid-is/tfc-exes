@@ -25,17 +25,17 @@ pub struct ControlWord {
     #[wire(bits = 1)]
     op_specific_4: bool,
     #[wire(bits = 1)]
-    reserved_1: bool,
+    bit_10: bool,
     #[wire(bits = 1)]
-    reserved_2: bool,
+    bit_11: bool,
     #[wire(bits = 1)]
-    reserved_3: bool,
+    bit_12: bool,
     #[wire(bits = 1)]
-    reserved_4: bool,
+    bit_13: bool,
     #[wire(bits = 1)]
-    reserved_5: bool,
+    bit_14: bool,
     #[wire(bits = 1)]
-    reserved_6: bool,
+    bit_15: bool,
 }
 
 impl Index for ControlWord {

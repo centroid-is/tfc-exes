@@ -27,7 +27,7 @@ const MAX_PDU_DATA: usize = 1100;
 /// Maximum number of EtherCAT frames that can be in flight at any one time.
 const MAX_FRAMES: usize = 16;
 /// Maximum total PDI length. // LENZE i550 requires 66 bytes
-const PDI_LEN: usize = 66;
+const PDI_LEN: usize = 76;
 
 static PDU_STORAGE: PduStorage<MAX_FRAMES, MAX_PDU_DATA> = PduStorage::new();
 
