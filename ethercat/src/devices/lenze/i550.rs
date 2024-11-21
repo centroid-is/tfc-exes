@@ -775,7 +775,7 @@ struct Config {
     #[schemars(description = "Analog input 1 mode")]
     analog_input_1: AnalogInput1,
     #[schemars(description = "Default speed ratio, -100.0% to 100.0%")]
-    speedratio: f64,
+    speedratio: f32,
 }
 
 pub struct I550 {
@@ -784,7 +784,7 @@ pub struct I550 {
     inputs: [tfc::ipc::Signal<bool>; 7],
     last_inputs: [Option<bool>; 7],
     speedratio: tfc::ipc::Slot<f64>,
-    rpm_setpoint: Arc<tokio::sync::RwLock<i16>>,
+    rpm_setpoint: Arc<std::sync::atomic::AtomicI16>,
     run: tfc::ipc::Slot<bool>,
     run_cached: bool,
     log_key: String,
@@ -833,8 +833,8 @@ impl I550 {
         let mut speedratio_channel = speedratio.subscribe();
         let min_speed = config.read().min_speed; // todo this is not updatable ...
         let max_speed = config.read().max_speed;
-        let rpm_setpoint = Arc::new(tokio::sync::RwLock::new(percentage_to_rpm(
-            config.read().speedratio,
+        let rpm_setpoint = Arc::new(std::sync::atomic::AtomicI16::new(percentage_to_rpm(
+            config.read().speedratio as f64,
             min_speed,
             max_speed,
         )));
@@ -843,8 +843,10 @@ impl I550 {
             while let Ok(()) = speedratio_channel.changed().await {
                 let speedratio = *speedratio_channel.borrow_and_update();
                 if let Some(speedratio) = speedratio {
-                    *rpm_setpoint_cp.write().await =
-                        percentage_to_rpm(speedratio, min_speed, max_speed);
+                    rpm_setpoint_cp.store(
+                        percentage_to_rpm(speedratio, min_speed, max_speed),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
                 }
             }
         });
@@ -1017,8 +1019,12 @@ impl Device for I550 {
     ) -> Result<(), Box<dyn Error>> {
         let (input, output) = device.io_raw_mut();
 
-        if output.len() != 4 {
-            warn!("Output PDO length is not 4");
+        if output.len() != OutputPdo::PACKED_LEN {
+            warn!(
+                "Output PDO length is not {}, output length is {}",
+                OutputPdo::PACKED_LEN,
+                output.len()
+            );
             return Ok(());
         }
 
@@ -1040,7 +1046,7 @@ impl Device for I550 {
         );
         let output_pdo = OutputPdo {
             control_word,
-            speed: *self.rpm_setpoint.read().await,
+            speed: self.rpm_setpoint.load(std::sync::atomic::Ordering::Relaxed),
             // output1: false,
         };
         output_pdo
