@@ -788,6 +788,8 @@ pub struct I550 {
     run: tfc::ipc::Slot<bool>,
     run_cached: Arc<std::sync::atomic::AtomicBool>,
     log_key: String,
+    speedratio_handle: tokio::task::JoinHandle<()>,
+    run_handle: tokio::task::JoinHandle<()>,
 }
 
 fn map(value: f64, in_min: f64, in_max: f64, out_min: f64, out_max: f64) -> f64 {
@@ -840,7 +842,7 @@ impl I550 {
         )));
         let rpm_setpoint_cp = Arc::clone(&rpm_setpoint);
         let log_key_cp = prefix.clone();
-        tokio::spawn(async move {
+        let speedratio_handle = tokio::spawn(async move {
             while let Ok(()) = speedratio_channel.changed().await {
                 let speedratio = *speedratio_channel.borrow_and_update();
                 if let Some(speedratio) = speedratio {
@@ -863,7 +865,7 @@ impl I550 {
         let run_cached_cp = Arc::clone(&run_cached);
         let mut run_channel = run.subscribe();
         let log_key_cp = prefix.clone();
-        tokio::spawn(async move {
+        let run_handle = tokio::spawn(async move {
             while let Ok(()) = run_channel.changed().await {
                 if let Some(run) = *run_channel.borrow_and_update() {
                     run_cached_cp.store(run, std::sync::atomic::Ordering::Relaxed);
@@ -894,7 +896,16 @@ impl I550 {
             run,
             run_cached,
             log_key: prefix,
+            speedratio_handle,
+            run_handle,
         }
+    }
+}
+
+impl Drop for I550 {
+    fn drop(&mut self) {
+        self.speedratio_handle.abort();
+        self.run_handle.abort();
     }
 }
 
@@ -922,21 +933,7 @@ impl Device for I550 {
             .sdo_write(RX_PDO_MAPPING, 0x02, 0x60420010 as u32)
             .await?; // set speed
 
-        // device
-        //     .sdo_write(RX_PDO_MAPPING, 0x03, 0x26340208 as u32)
-        //     .await?;
-
         device.sdo_write(RX_PDO_MAPPING, 0x00, 2 as u8).await?;
-
-        // // // sdo_write<uint32_t>(ecx::tx_pdo_mapping<0x03>, 0x20020510);  // LCR  - CURRENT USAGE ( A
-        // // // sdo_write<uint32_t>(ecx::tx_pdo_mapping<0x04>, 0x20160310);  // 1LIR - DI1-DI6
-        // // // sdo_write<uint32_t>(ecx::tx_pdo_mapping<0x05>, 0x20291610);  // LFT  - Last error occured
-        // // // sdo_write<uint32_t>(ecx::tx_pdo_mapping<0x06>, 0x20022910);  // HMIS - Drive state
-        // // sdo_write<uint32_t>(
-        // //     ecx::rx_pdo_mapping<0x03>,
-        // //     0x20160D10);  // OL1R - Logic outputs states ( bit0: Relay 1, bit1: Relay 2, bit3 - bit7: unknown, bit8: DQ1 )
-        // // sdo_write<uint32_t>(ecx::rx_pdo_mapping<0x04>, 0x203C0210);  // ACC - Acceleration
-        // // sdo_write<uint32_t>(ecx::rx_pdo_mapping<0x05>, 0x203C0310);  // DEC - Deceleration
 
         // zero the size
         device.sdo_write(TX_PDO_MAPPING, 0x00, 0 as u8).await?;
