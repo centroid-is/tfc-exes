@@ -61,3 +61,67 @@ where
         self.sdo_write(T::INDEX, T::SUBINDEX, value).await
     }
 }
+
+#[macro_export]
+/// Define a value type for a device.
+/// This macro defines a new struct with a single field of the given type.
+/// The struct implements the `Index` trait and is marked as `#[derive(Default)]`.
+macro_rules! define_value_type_internal {
+    (
+        $name:ident,
+        $type:ty,
+        $bytes:expr,
+        $bits:expr,
+        $default:expr,
+        $index:expr,
+        $subindex:expr
+    ) => {
+        #[derive(
+            Debug,
+            ethercrab_wire::EtherCrabWireWrite,
+            serde::Serialize,
+            serde::Deserialize,
+            schemars::JsonSchema,
+            Copy,
+            Clone,
+        )]
+        #[wire(bytes = $bytes)]
+        #[serde(transparent)]
+        struct $name {
+            #[wire(bits = $bits)]
+            value: $type,
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self { value: $default }
+            }
+        }
+
+        impl Index for $name {
+            const INDEX: u16 = $index;
+            const SUBINDEX: u8 = $subindex;
+        }
+    };
+}
+#[macro_export]
+/// Define a value type for a device.
+/// This macro defines a new struct with a single field of the given type.
+/// The struct implements the `Index` trait and is marked as `#[derive(Default)]`.
+/// parameters:
+/// - $name: the name of the struct
+/// - $type: the type of the field
+/// - $default: the default value of the field
+/// - $index: the index of the SDO
+/// - $subindex: the subindex of the SDO
+macro_rules! define_value_type {
+    ($name:ident, u16, $default:expr, $index:expr, $subindex:expr) => {
+        $crate::define_value_type_internal!($name, u16, 2, 16, $default, $index, $subindex);
+    };
+    ($name:ident, u32, $default:expr, $index:expr, $subindex:expr) => {
+        $crate::define_value_type_internal!($name, u32, 4, 32, $default, $index, $subindex);
+    };
+    ($name:ident, f32, $default:expr, $index:expr, $subindex:expr) => {
+        $crate::define_value_type_internal!($name, f32, 4, 32, $default, $index, $subindex);
+    };
+}

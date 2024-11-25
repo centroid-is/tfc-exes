@@ -15,6 +15,7 @@ use std::error::Error;
 use std::sync::Arc;
 use tfc::confman::ConfMan;
 
+use crate::define_value_type;
 use crate::devices::CiA402;
 
 static RX_PDO_ASSIGN: u16 = 0x1C12;
@@ -643,45 +644,6 @@ struct AnalogInput1Fault {
 impl Index for AnalogInput1Fault {
     const INDEX: u16 = 0x2DA4;
     const SUBINDEX: u8 = 16;
-}
-
-macro_rules! define_value_type_internal {
-    (
-        $name:ident,
-        $type:ty,
-        $bytes:expr,
-        $bits:expr,
-        $default:expr,
-        $index:expr,
-        $subindex:expr
-    ) => {
-        #[derive(Debug, EtherCrabWireWrite, Serialize, Deserialize, JsonSchema, Copy, Clone)]
-        #[wire(bytes = $bytes)]
-        #[serde(transparent)]
-        struct $name {
-            #[wire(bits = $bits)]
-            value: $type,
-        }
-
-        impl Default for $name {
-            fn default() -> Self {
-                Self { value: $default }
-            }
-        }
-
-        impl Index for $name {
-            const INDEX: u16 = $index;
-            const SUBINDEX: u8 = $subindex;
-        }
-    };
-}
-macro_rules! define_value_type {
-    ($name:ident, u16, $default:expr, $index:expr, $subindex:expr) => {
-        define_value_type_internal!($name, u16, 2, 16, $default, $index, $subindex);
-    };
-    ($name:ident, u32, $default:expr, $index:expr, $subindex:expr) => {
-        define_value_type_internal!($name, u32, 4, 32, $default, $index, $subindex);
-    };
 }
 
 define_value_type!(BaseVoltage, u16, 400, 0x2B01, 1); // volts
