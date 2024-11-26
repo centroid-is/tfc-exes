@@ -6,7 +6,9 @@ use log::warn;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::sync::Arc;
 use tfc::confman::ConfMan;
+use zbus::interface;
 
 use crate::define_value_type;
 use crate::devices::device_trait::{Device, DeviceInfo, Index, WriteValueIndex};
@@ -99,9 +101,9 @@ struct ControlWord {
 #[wire(bytes = 6)]
 struct InputPdo {
     #[wire(bits = 16)]
-    value: StatusWord,
+    status_word: StatusWord,
     #[wire(bits = 32)]
-    raw_value: i32,
+    raw_value: f32,
 }
 
 #[derive(Debug, EtherCrabWireWrite)]
@@ -137,6 +139,40 @@ impl Index for Filter {
     const SUBINDEX: u8 = 0x11;
 }
 
+// From beckhoff manual, please note that the weigher can itself output unit (kg) or you can neutralize this by configuring the relevant parameters
+// 5.5.6 Calculating the weight
+// Each measurement of the analog inputs is followed by the calculation of the resulting weight or the resulting
+// force, which is made up of the ratio of the measuring signal to the reference signal and of several
+// calibrations.
+// Y_R = (U_Diff / U_Ref) ⋅ A_i                     (1.0) Calculation of the raw value in mV/V
+// Y_L = ( (Y_R - C_ZB) / (C_n - C_ZB) ) ⋅ Emax     (1.1) Calculation of the weight
+// Y_S = Y_L ⋅ A_S                                  (1.2) Scaling factor (e.g. factor 1000 for rescaling from kg to g)
+// Y_G = Y_S ⋅ (G / 9.80665)                        (1.3) Influence of acceleration of gravity
+// Y_AUS = Y_G ⋅ Gain - Tare                        (1.4) Gain and Tare
+// | Name  | Description | CoE Index |
+// |-------|-------------|-----------|
+// | UDiff | Bridge voltage/differential voltage of the sensor element, after averager and filter | |
+// | URef  | Bridge supply voltage/reference signal of the sensor element, after averager and filter | |
+// | Ai    | Internal gain, not changeable. This factor accounts for the unit standardization from mV to V and the different full-scale deflections of the input channels | |
+// | Cn    | Nominal characteristic value of the sensor element (unit mV/V, e.g. nominally 2 mV/V or 2.0234 mV/V according to calibration protocol) | 0x8000:23 |
+// | CZB   | Zero balance of the sensor element (unit mV/V, e.g. -0.0142 according to calibration protocol) | 0x8000:25 |
+// | Emax  | Nominal load of the sensor element. The firmware always calculates without units, the unit (kg, g, lb) used here is then also applicable to the result | 0x8000:24 |
+// | AS    | Scaling factor (e.g. factor 1000 for rescaling from kg to g) | 0x8000:27 |
+// | G     | Acceleration of gravity in m/s² (default: 9.80665 m/s²) | 0x8000:26 |
+// | Gain  | | 0x8000:21 |
+// | Tare  | | 0x8000:22 |
+
+#[derive(Serialize, Deserialize, JsonSchema, Debug)]
+pub enum Mode {
+    Scale = 0,
+    Reference = 1,
+}
+impl Default for Mode {
+    fn default() -> Self {
+        Self::Scale
+    }
+}
+
 define_value_type!(NominalValue, f32, 1.0, 0x8000, 0x23);
 define_value_type!(Gravity, f32, 9.806650, 0x8000, 0x26);
 define_value_type!(ZeroBalance, f32, 0.0, 0x8000, 0x25);
@@ -145,8 +181,9 @@ define_value_type!(ScaleFactor, f32, 1000.0, 0x8000, 0x27);
 #[derive(Serialize, Deserialize, JsonSchema, Debug)]
 struct Config {
     filter: Filter,
-    nominal_load: f32,     // kg
-    calibration_load: f32, // kg
+    nominal_load: f32, // kg
+    #[schemars(description = "Mass of reference load")]
+    calibration_load: f64, // kg
     #[schemars(
         description = "Nominal characteristic value of the sensor element, Set to 1 if you wan't raw value from load cell. mV/V"
     )]
@@ -163,6 +200,21 @@ struct Config {
         description = "This factor can be used to re-scale the process data. In order to change the display from kg to g, for example, the factor 1000 can be entered here."
     )]
     scale_factor: Option<ScaleFactor>,
+    // skip deserializing does not work, it needs to be read only in schema, since we need to read the value from file
+    // #[serde(skip_deserializing)] // read only
+    #[schemars(description = "Signal read from load cell at zero calibration")]
+    zero_signal_read: f64,
+    // #[serde(skip_deserializing)] // read only
+    #[schemars(description = "Signal read from load cell at calibration with calibration load")]
+    calibration_signal_read: f64,
+    #[schemars(description = "Resolution, smallest scale increment, like 0.001 kg or 0.010 kg")]
+    resolution: f64, // kg
+    #[schemars(description = "Mode of operation")]
+    mode: Mode,
+    #[schemars(
+        description = "Number of samples to use for median filter, samples are every tx_pdo period according to manual. Roughly process data interval."
+    )]
+    filter_samples: u16,
 }
 
 impl Default for Config {
@@ -175,14 +227,253 @@ impl Default for Config {
             gravity: None,
             zero_balance: None,
             scale_factor: None,
+            zero_signal_read: 0.0,
+            calibration_signal_read: 1000.0,
+            resolution: 0.001,
+            mode: Mode::default(),
+            filter_samples: 10,
         }
     }
 }
+
+pub struct DbusInterface {}
+#[interface(name = "is.centroid.el3356")]
+impl DbusInterface {
+    async fn set_zero(&self) -> Result<(), zbus::fdo::Error> {
+        Ok(())
+    }
+}
+
+// from https://github.com/rust-lang/rust/issues/72353#issuecomment-1093729062
+pub struct AtomicF64 {
+    storage: std::sync::atomic::AtomicU64,
+}
+impl AtomicF64 {
+    pub fn new(value: f64) -> Self {
+        let as_u64 = value.to_bits();
+        Self {
+            storage: std::sync::atomic::AtomicU64::new(as_u64),
+        }
+    }
+    pub fn store(&self, value: f64, ordering: std::sync::atomic::Ordering) {
+        let as_u64 = value.to_bits();
+        self.storage.store(as_u64, ordering)
+    }
+    pub fn load(&self, ordering: std::sync::atomic::Ordering) -> f64 {
+        let as_u64 = self.storage.load(ordering);
+        f64::from_bits(as_u64)
+    }
+}
+
+pub struct Scale {
+    zero_calibrate_slot: tfc::ipc::Slot<bool>,
+    calibrate_slot: tfc::ipc::Slot<bool>,
+    tare_slot: tfc::ipc::Slot<bool>,
+    ratio_slot: tfc::ipc::Slot<f64>,
+    mass_signal: tfc::ipc::Signal<f64>,
+    tare: f64, // signal read tare for fixing zero point, runtime value
+    ratio: Arc<AtomicF64>,
+    zero_calibrate: Arc<std::sync::atomic::AtomicBool>,
+    calibrate: Arc<std::sync::atomic::AtomicBool>,
+    last_mass: f64,
+}
+impl Scale {
+    pub fn new(dbus: zbus::Connection, prefix: String) -> Self {
+        let mut ratio_slot = tfc::ipc::Slot::new(
+            dbus.clone(),
+            tfc::ipc::Base::new(
+                format!("{prefix}_ratio").as_str(),
+                Some("Scale raw input by this factor, useful for onboard vessel scale"),
+            ),
+        );
+        let ratio = Arc::new(AtomicF64::new(1.0));
+        let ratio_cp = ratio.clone();
+        ratio_slot.recv(Box::new(move |new_ratio| {
+            ratio_cp.store(*new_ratio, std::sync::atomic::Ordering::Relaxed);
+        }));
+        let mass_signal = tfc::ipc::Signal::new(
+            dbus.clone(),
+            tfc::ipc::Base::new(format!("{prefix}_mass").as_str(), Some("Mass output in kg")),
+        );
+        tfc::ipc::dbus::SignalInterface::register(
+            mass_signal.base(),
+            dbus.clone(),
+            mass_signal.subscribe(),
+        );
+        let mut zero_calibrate_slot = tfc::ipc::Slot::new(
+            dbus.clone(),
+            tfc::ipc::Base::new(
+                format!("{prefix}_zero_calibrate").as_str(),
+                Some("Offset current weight on cell as zero"),
+            ),
+        );
+        tfc::ipc::dbus::SlotInterface::register(
+            zero_calibrate_slot.base(),
+            dbus.clone(),
+            zero_calibrate_slot.channel("dbus"),
+        );
+        let zero_calibrate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let zero_calibrate_cp = zero_calibrate.clone();
+        zero_calibrate_slot.recv(Box::new(move |new_zero_calibrate| {
+            zero_calibrate_cp.store(*new_zero_calibrate, std::sync::atomic::Ordering::Relaxed);
+        }));
+        let mut calibrate_slot = tfc::ipc::Slot::new(
+            dbus.clone(),
+        tfc::ipc::Base::new(
+            format!("{prefix}_calibrate").as_str(),
+                Some("Take current weight as calibration point, according to calibration load in config"),
+            ),
+        );
+        tfc::ipc::dbus::SlotInterface::register(
+            calibrate_slot.base(),
+            dbus.clone(),
+            calibrate_slot.channel("dbus"),
+        );
+        let calibrate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let calibrate_cp = calibrate.clone();
+        calibrate_slot.recv(Box::new(move |new_calibrate| {
+            calibrate_cp.store(*new_calibrate, std::sync::atomic::Ordering::Relaxed);
+        }));
+        Self {
+            zero_calibrate_slot,
+            calibrate_slot,
+            tare_slot: tfc::ipc::Slot::new(
+                dbus.clone(),
+                tfc::ipc::Base::new(
+                    format!("{prefix}_tare").as_str(),
+                    Some("Offset current weight on cell as tare, meaning it will zero out the current weight"),
+                ),
+            ),
+            ratio_slot,
+            mass_signal,
+            tare: 0.0,
+            ratio,
+            zero_calibrate,
+            calibrate,
+            last_mass: 0.0,
+        }
+    }
+}
+
+pub struct ReferenceScale {
+    calibrate_slot: tfc::ipc::Slot<bool>,
+    ratio_signal: tfc::ipc::Signal<f64>,
+    last_ratio: f64,
+    ratio_epsilon: f64, // represent resolution of 0.001 or whatever it is set to
+}
+
+impl ReferenceScale {
+    pub fn new(dbus: zbus::Connection, prefix: String) -> Self {
+        Self {
+            calibrate_slot: tfc::ipc::Slot::new(
+                dbus.clone(),
+                tfc::ipc::Base::new(
+                    format!("{prefix}_calibrate").as_str(),
+                    Some("Take current weight as calibration point, according to calibration load in config"),
+                ),
+            ),
+            ratio_signal: tfc::ipc::Signal::new(
+                dbus.clone(),
+                tfc::ipc::Base::new(format!("{prefix}_ratio").as_str(), Some("Output ratio of calibration load compared to current load")),
+            ),
+            last_ratio: 1.0,
+            ratio_epsilon: 0.001,
+        }
+    }
+}
+
+pub enum ModeImpl {
+    Scale(Scale),
+    Reference(ReferenceScale),
+}
+
+// mod my_median {
+//     #[derive(Debug)]
+//     pub struct MedianFilter {
+//         capacity: usize,
+//         window: std::collections::VecDeque<f64>, // Sliding window of elements
+//         sorted_indices: Vec<usize>,              // Indices into the window VecDeque
+//     }
+
+//     impl MedianFilter {
+//         /// Creates a new MedianFilter with the specified capacity.
+//         pub fn new(capacity: usize) -> Self {
+//             Self {
+//                 capacity,
+//                 window: std::collections::VecDeque::with_capacity(capacity),
+//                 sorted_indices: Vec::with_capacity(capacity),
+//             }
+//         }
+
+//         /// Appends a value to the filter and updates the median.
+//         pub fn append(&mut self, value: f64) {
+//             // If capacity is reached, remove the oldest element.
+//             if self.window.len() == self.capacity {
+//                 self.remove_oldest();
+//             }
+
+//             // Add new value to the window.
+//             self.window.push_back(value);
+
+//             // Insert the index of the new value into sorted_indices.
+//             let idx = self.window.len() - 1;
+//             let insertion_point = self
+//                 .sorted_indices
+//                 .binary_search_by(|&i| self.window[i].total_cmp(&value))
+//                 .unwrap_or_else(|e| e);
+//             self.sorted_indices.insert(insertion_point, idx);
+//         }
+
+//         /// Removes the oldest value from the filter.
+//         fn remove_oldest(&mut self) {
+//             // Remove the oldest element from the window.
+//             self.window.pop_front();
+
+//             // Adjust indices in sorted_indices.
+//             let mut removed_index = None;
+//             for (i, &idx) in self.sorted_indices.iter().enumerate() {
+//                 if idx == 0 {
+//                     // Found the index of the oldest element.
+//                     removed_index = Some(i);
+//                 } else {
+//                     // Decrement indices to account for the removed element.
+//                     self.sorted_indices[i] = idx - 1;
+//                 }
+//             }
+
+//             // Remove the index of the oldest element from sorted_indices.
+//             if let Some(i) = removed_index {
+//                 self.sorted_indices.remove(i);
+//             }
+//         }
+
+//         /// Retrieves the current median value.
+//         pub fn median(&self) -> Option<f64> {
+//             let len = self.sorted_indices.len();
+//             if len == 0 {
+//                 return None;
+//             }
+
+//             if len % 2 == 1 {
+//                 // Odd number of elements.
+//                 let mid_idx = self.sorted_indices[len / 2];
+//                 Some(self.window[mid_idx])
+//             } else {
+//                 // Even number of elements.
+//                 let mid1_idx = self.sorted_indices[len / 2 - 1];
+//                 let mid2_idx = self.sorted_indices[len / 2];
+//                 Some((self.window[mid1_idx] + self.window[mid2_idx]) / 2.0)
+//             }
+//         }
+//     }
+// }
 
 pub struct El3356 {
     cnt: u128,
     config: ConfMan<Config>,
     log_key: String,
+    mode: ModeImpl,
+    filter: median::Filter<f64>,
 }
 
 impl El3356 {
@@ -191,12 +482,25 @@ impl El3356 {
         if alias_address != 0 {
             prefix = format!("el3356_alias_{alias_address}");
         }
+        let config: ConfMan<Config> = ConfMan::new(dbus.clone(), &prefix);
+
+        let mode = match config.read().mode {
+            Mode::Scale => ModeImpl::Scale(Scale::new(dbus.clone(), prefix.clone())),
+            Mode::Reference => {
+                ModeImpl::Reference(ReferenceScale::new(dbus.clone(), prefix.clone()))
+            }
+        };
+
         Self {
             cnt: 0,
-            config: ConfMan::new(dbus.clone(), &prefix),
-            log_key: prefix,
+            config,
+            log_key: prefix.clone(),
+            mode,
+            filter: median::Filter::new(100),
         }
     }
+    /// Zero calibration
+    /// Resets the unit to default parameters and than records internally the current weight and sets as zero
     pub async fn zero_calibrate<S: std::ops::Deref<Target = SubDevice>>(
         device: &mut SubDeviceRef<'_, S>,
         nominal_load: f32,
@@ -235,6 +539,8 @@ impl El3356 {
         }
         Ok(())
     }
+    /// Calibrate
+    /// following zero calibrate a calibrate is necessary, it sets the second point of linear interpolation of the signal to the measured unit
     pub async fn calibrate<S: std::ops::Deref<Target = SubDevice>>(
         device: &mut SubDeviceRef<'_, S>,
         calibration_load: f32,
@@ -270,47 +576,7 @@ impl Device for El3356 {
     async fn setup<'maindevice, 'group>(
         &mut self,
         device: &mut SubDeviceRef<'maindevice, AtomicRefMut<'group, SubDevice>>,
-    ) -> Result<(), Box<dyn Error>> {
-        // device.sdo_write(RX_PDO_ASSIGN, 0x00, 0 as u8).await?;
-        // device.sdo_write(TX_PDO_ASSIGN, 0x00, 0 as u8).await?;
-
-        // // zero the size
-        // device.sdo_write(RX_PDO_MAPPING, 0x00, 0 as u8).await?;
-
-        // // address 0x60FD, subindex 0x00, length 0x20 = 32 bytes
-        // device
-        //     .sdo_write(RX_PDO_MAPPING, 0x01, 0x70000101 as u32)
-        //     .await?; // start calibration
-
-        // device
-        //     .sdo_write(RX_PDO_MAPPING, 0x02, 0x70000201 as u32)
-        //     .await?; // disable calibration
-
-        // device
-        //     .sdo_write(RX_PDO_MAPPING, 0x03, 0x70000301 as u32)
-        //     .await?; // input freeze
-
-        // device
-        //     .sdo_write(RX_PDO_MAPPING, 0x04, 0x70000401 as u32)
-        //     .await?; // sample mode
-
-        // device
-        //     .sdo_write(RX_PDO_MAPPING, 0x05, 0x70000501 as u32)
-        //     .await?; // tara
-
-        // device
-        //     .sdo_write(RX_PDO_MAPPING, 0x06, 0x00000003 as u32)
-        //     .await?; // 3 bits alignment
-
-        // device
-        //     .sdo_write(RX_PDO_MAPPING, 0x07, 0x00000008 as u32)
-        //     .await?; // 8 bits alignment
-
-        // device.sdo_write(RX_PDO_MAPPING, 0x00, 8 as u8).await?;
-
-        // // zero the size
-        // device.sdo_write(TX_PDO_MAPPING, 0x00, 0 as u8).await?;
-
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if let Some(nominal_value) = self.config.read().nominal_value {
             device.sdo_write_value_index(nominal_value).await?;
         }
@@ -320,12 +586,17 @@ impl Device for El3356 {
         if let Some(zero_balance) = self.config.read().zero_balance {
             device.sdo_write_value_index(zero_balance).await?;
         }
+        if let Some(scale_factor) = self.config.read().scale_factor {
+            device.sdo_write_value_index(scale_factor).await?;
+        }
+
         device.sdo_write(0x8000, 0x27, 1000000.0 as f32).await?;
 
         device.sdo_write(TX_PDO_ASSIGN, 0x00, 0 as u8).await?;
         device.sdo_write(TX_PDO_ASSIGN, 0x01, 0x1A00 as u16).await?;
-        // device.sdo_write(TX_PDO_ASSIGN, 0x02, 0x1A02 as u16).await?; // use REAL from 0x1A02 pdo mapping
-        device.sdo_write(TX_PDO_ASSIGN, 0x02, 0x1A01 as u16).await?; // use int from 0x1A02 pdo mapping
+        device.sdo_write(TX_PDO_ASSIGN, 0x02, 0x1A02 as u16).await?; // use REAL from 0x1A02 pdo mapping
+
+        // device.sdo_write(TX_PDO_ASSIGN, 0x02, 0x1A01 as u16).await?; // use int from 0x1A01pdo mapping
         device.sdo_write(TX_PDO_ASSIGN, 0x00, 0x02 as u8).await?;
 
         Ok(())
@@ -333,10 +604,16 @@ impl Device for El3356 {
     async fn process_data<'maindevice, 'group>(
         &mut self,
         device: &mut SubDeviceRef<'maindevice, SubDevicePdi<'group>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.cnt += 1;
 
         let (i, mut o) = device.io_raw_mut();
+
+        let input_pdo = InputPdo::unpack_from_slice(&i)?;
+
+        // if !input_pdo.status_word.tx_pdo {
+        //     return Ok(());
+        // }
 
         if self.cnt % 1000 == 0 {
             let input_pdo = InputPdo::unpack_from_slice(&i).expect("Error unpacking input PDO");
@@ -354,6 +631,79 @@ impl Device for El3356 {
                 .pack_to_slice(&mut o)
                 .expect("Error packing output PDO");
         }
+
+        let signal = input_pdo.raw_value as f64;
+
+        match &mut self.mode {
+            ModeImpl::Scale(ref mut scale) => {
+                let ratio = scale.ratio.load(std::sync::atomic::Ordering::Relaxed);
+                let signal_scaled = signal / ratio; // normalized value of raw value with respect to the given ratio
+
+                // filter the signal
+                let instant = std::time::Instant::now();
+                let signal_scaled = self.filter.consume(signal_scaled);
+                let duration = instant.elapsed();
+                warn!(target: &self.log_key, "El3356: filter duration: {:?}", duration);
+
+                // let's see whether we should set zero signal read now
+                if scale
+                    .zero_calibrate
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    self.config.write().value_mut().zero_signal_read = signal_scaled;
+                    scale
+                        .zero_calibrate
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+                // let's see whether we should set calibration signal read now
+                if scale.calibrate.load(std::sync::atomic::Ordering::Relaxed) {
+                    self.config.write().value_mut().calibration_signal_read = signal_scaled;
+                    scale
+                        .calibrate
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+
+                // lets go through linear interpolation
+                let zero = self.config.read().zero_signal_read + scale.tare;
+                let signal_withdrawn_zero = signal_scaled - zero;
+                let calibration_signal = self.config.read().calibration_signal_read;
+                let zeroed_calibration_signal = calibration_signal - zero;
+                if zeroed_calibration_signal <= 0.0 {
+                    return Err("Zeroed calibration signal is <= 0, this should not happen".into());
+                }
+
+                let signal_mass = signal_withdrawn_zero * self.config.read().calibration_load
+                    / zeroed_calibration_signal;
+                // now we have the mass in full resolution, lets scale it down to the given resolution
+                let scaling_factor = 1.0 / self.config.read().resolution; // 0.001 example
+                let signal_mass_rounded = (signal_mass * scaling_factor).round() / scaling_factor;
+
+                if signal_mass_rounded.is_nan() {
+                    return Err("Signal mass rounded is NaN, this should not happen".into());
+                }
+                if signal_mass_rounded.is_infinite() {
+                    return Err("Signal mass rounded is infinite, this should not happen".into());
+                }
+
+                // Now we have a valid measurement let's process it
+
+                if signal_mass_rounded == scale.last_mass {
+                    return Ok(());
+                }
+                scale.last_mass = signal_mass_rounded;
+                scale.mass_signal.async_send(signal_mass_rounded).await?;
+                Ok(()) as Result<(), Box<dyn Error + Send + Sync>>
+            }
+            ModeImpl::Reference(ref mut reference) => {
+                let ref_ratio = signal / self.config.read().calibration_signal_read as f64;
+                if (ref_ratio - reference.last_ratio).abs() > reference.ratio_epsilon {
+                    reference.ratio_signal.async_send(ref_ratio).await?;
+                    reference.last_ratio = ref_ratio;
+                }
+                Ok(())
+            }
+        }?;
+
         Ok(())
     }
 }

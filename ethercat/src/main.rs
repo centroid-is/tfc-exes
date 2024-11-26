@@ -68,7 +68,10 @@ impl Bus {
             log_key: "ethercat".to_string(),
         }
     }
-    pub async fn init(&mut self, dbus: zbus::Connection) -> Result<(), Box<dyn Error>> {
+    pub async fn init(
+        &mut self,
+        dbus: zbus::Connection,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!(target: &self.log_key, "Initializing main device");
         let mut group = self
             .main_device
@@ -113,7 +116,7 @@ impl Bus {
         Ok(())
     }
 
-    pub async fn run(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn run(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let ref mut group = self.group.as_mut().expect("Group not initialized");
 
         let mut tick_interval = tokio::time::interval(self.config.read().cycle_time.into());
@@ -123,6 +126,8 @@ impl Bus {
         let mut instant = Instant::now();
         let mut tx_rx_duration = Duration::ZERO;
         let mut process_data_duration = Duration::ZERO;
+        let mut device_errors: [Option<Box<dyn Error + Send + Sync>>; MAX_SUBDEVICES] =
+            std::array::from_fn(|_| None);
         loop {
             let tx_rx_instant = Instant::now();
             group.tx_rx(&self.main_device).await?;
@@ -131,7 +136,17 @@ impl Bus {
             let process_data_instant = Instant::now();
             for (device_index, mut subdevice) in group.iter(&self.main_device).enumerate() {
                 if let Some(device) = self.devices.get_mut(device_index) {
-                    device.process_data(&mut subdevice).await?;
+                    match device.process_data(&mut subdevice).await {
+                        Ok(()) => {
+                            device_errors[device_index] = None;
+                        }
+                        Err(e) => {
+                            if device_errors[device_index].is_none() {
+                                warn!(target: &self.log_key, "Failed to process data for subdevice {}: {}", device_index, e);
+                            }
+                            device_errors[device_index] = Some(e);
+                        }
+                    }
                 }
             }
             process_data_duration += process_data_instant.elapsed();

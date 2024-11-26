@@ -8,11 +8,11 @@ pub trait Device {
     async fn setup<'maindevice, 'group>(
         &mut self,
         device: &mut SubDeviceRef<'maindevice, AtomicRefMut<'group, SubDevice>>,
-    ) -> Result<(), Box<dyn Error>>;
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
     async fn process_data<'maindevice, 'group>(
         &mut self,
         device: &mut SubDeviceRef<'maindevice, SubDevicePdi<'group>>,
-    ) -> Result<(), Box<dyn Error>>;
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 
 pub trait DeviceInfo {
@@ -28,13 +28,13 @@ impl Device for UnimplementedDevice {
     async fn setup<'maindevice, 'group>(
         &mut self,
         _device: &mut SubDeviceRef<'maindevice, AtomicRefMut<'group, SubDevice>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     }
     async fn process_data<'maindevice, 'group>(
         &mut self,
         device: &mut SubDeviceRef<'maindevice, SubDevicePdi<'group>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     }
 }

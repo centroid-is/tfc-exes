@@ -56,13 +56,13 @@ impl<D: DeviceInfo + Entries<N> + Send + Sync, const N: usize, const ARR_LEN: us
     async fn setup<'maindevice, 'group>(
         &mut self,
         _device: &mut SubDeviceRef<'maindevice, AtomicRefMut<'group, SubDevice>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     }
     async fn process_data<'maindevice, 'group>(
         &mut self,
         device: &mut SubDeviceRef<'maindevice, SubDevicePdi<'group>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let input_data = device.inputs_raw();
 
         if input_data.len() != ARR_LEN && !self.error {

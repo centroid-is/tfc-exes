@@ -876,7 +876,7 @@ impl Device for I550 {
     async fn setup<'maindevice, 'group>(
         &mut self,
         device: &mut SubDeviceRef<'maindevice, AtomicRefMut<'group, SubDevice>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         warn!("Setting up I550");
 
         // reset fault
@@ -990,7 +990,7 @@ impl Device for I550 {
     async fn process_data<'maindevice, 'group>(
         &mut self,
         device: &mut SubDeviceRef<'maindevice, SubDevicePdi<'group>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (input, output) = device.io_raw_mut();
 
         if output.len() != OutputPdo::PACKED_LEN {
