@@ -266,15 +266,11 @@ impl AtomicF64 {
 }
 
 pub struct Scale {
-    zero_calibrate_slot: tfc::ipc::Slot<bool>,
-    calibrate_slot: tfc::ipc::Slot<bool>,
     tare_slot: tfc::ipc::Slot<bool>,
     ratio_slot: tfc::ipc::Slot<f64>,
     mass_signal: tfc::ipc::Signal<f64>,
     tare: f64, // signal read tare for fixing zero point, runtime value
     ratio: Arc<AtomicF64>,
-    zero_calibrate_cmd: Arc<std::sync::atomic::AtomicBool>,
-    calibrate_cmd: Arc<std::sync::atomic::AtomicBool>,
     tare_cmd: Arc<std::sync::atomic::AtomicBool>,
     last_mass: f64,
 }
@@ -301,42 +297,6 @@ impl Scale {
             dbus.clone(),
             mass_signal.subscribe(),
         );
-        // zero calibrate slot
-        let mut zero_calibrate_slot = tfc::ipc::Slot::new(
-            dbus.clone(),
-            tfc::ipc::Base::new(
-                format!("{prefix}_zero_calibrate").as_str(),
-                Some("Offset current weight on cell as zero"),
-            ),
-        );
-        tfc::ipc::dbus::SlotInterface::register(
-            zero_calibrate_slot.base(),
-            dbus.clone(),
-            zero_calibrate_slot.channel("dbus"),
-        );
-        let zero_calibrate = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let zero_calibrate_cp = zero_calibrate.clone();
-        zero_calibrate_slot.recv(Box::new(move |new_zero_calibrate| {
-            zero_calibrate_cp.store(*new_zero_calibrate, std::sync::atomic::Ordering::Relaxed);
-        }));
-        // calibrate slot
-        let mut calibrate_slot = tfc::ipc::Slot::new(
-            dbus.clone(),
-        tfc::ipc::Base::new(
-            format!("{prefix}_calibrate").as_str(),
-                Some("Take current weight as calibration point, according to calibration load in config"),
-            ),
-        );
-        tfc::ipc::dbus::SlotInterface::register(
-            calibrate_slot.base(),
-            dbus.clone(),
-            calibrate_slot.channel("dbus"),
-        );
-        let calibrate = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let calibrate_cp = calibrate.clone();
-        calibrate_slot.recv(Box::new(move |new_calibrate| {
-            calibrate_cp.store(*new_calibrate, std::sync::atomic::Ordering::Relaxed);
-        }));
         // tare slot
         let mut tare_slot = tfc::ipc::Slot::new(
             dbus.clone(),
@@ -357,15 +317,11 @@ impl Scale {
         }));
 
         Self {
-            zero_calibrate_slot,
-            calibrate_slot,
             tare_slot,
             ratio_slot,
             mass_signal,
             tare: 0.0,
             ratio,
-            zero_calibrate_cmd: zero_calibrate,
-            calibrate_cmd: calibrate,
             last_mass: 0.0,
             tare_cmd: tare,
         }
@@ -373,7 +329,6 @@ impl Scale {
 }
 
 pub struct ReferenceScale {
-    calibrate_slot: tfc::ipc::Slot<bool>,
     ratio_signal: tfc::ipc::Signal<f64>,
     last_ratio: f64,
     ratio_epsilon: f64, // represent resolution of 0.001 or whatever it is set to
@@ -381,18 +336,20 @@ pub struct ReferenceScale {
 
 impl ReferenceScale {
     pub fn new(dbus: zbus::Connection, prefix: String) -> Self {
+        let ratio_signal = tfc::ipc::Signal::new(
+            dbus.clone(),
+            tfc::ipc::Base::new(
+                format!("{prefix}_ratio").as_str(),
+                Some("Output ratio of calibration load compared to current load"),
+            ),
+        );
+        tfc::ipc::dbus::SignalInterface::register(
+            ratio_signal.base(),
+            dbus.clone(),
+            ratio_signal.subscribe(),
+        );
         Self {
-            calibrate_slot: tfc::ipc::Slot::new(
-                dbus.clone(),
-                tfc::ipc::Base::new(
-                    format!("{prefix}_calibrate").as_str(),
-                    Some("Take current weight as calibration point, according to calibration load in config"),
-                ),
-            ),
-            ratio_signal: tfc::ipc::Signal::new(
-                dbus.clone(),
-                tfc::ipc::Base::new(format!("{prefix}_ratio").as_str(), Some("Output ratio of calibration load compared to current load")),
-            ),
+            ratio_signal,
             last_ratio: 1.0,
             ratio_epsilon: 0.001,
         }
@@ -438,6 +395,10 @@ pub struct El3356 {
     log_key: String,
     mode: ModeImpl,
     filter: my_avg::AvgFilter,
+    calibrate_cmd: Arc<std::sync::atomic::AtomicBool>,
+    zero_calibrate_cmd: Arc<std::sync::atomic::AtomicBool>,
+    calibrate_slot: tfc::ipc::Slot<bool>,
+    zero_calibrate_slot: tfc::ipc::Slot<bool>,
 }
 
 impl El3356 {
@@ -456,12 +417,52 @@ impl El3356 {
         };
         let filter = my_avg::AvgFilter::new(config.read().filter_window as usize);
 
+        let mut calibrate_slot = tfc::ipc::Slot::new(
+            dbus.clone(),
+            tfc::ipc::Base::new(
+                format!("{prefix}_calibrate").as_str(),
+                Some("Take current weight as calibration point, according to calibration load in config"),
+            ),
+        );
+        tfc::ipc::dbus::SlotInterface::register(
+            calibrate_slot.base(),
+            dbus.clone(),
+            calibrate_slot.channel("dbus"),
+        );
+        let calibrate_cmd = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let calibrate_cmd_cp = calibrate_cmd.clone();
+        calibrate_slot.recv(Box::new(move |new_calibrate| {
+            calibrate_cmd_cp.store(*new_calibrate, std::sync::atomic::Ordering::Relaxed);
+        }));
+        // zero calibrate slot
+        let mut zero_calibrate_slot = tfc::ipc::Slot::new(
+            dbus.clone(),
+            tfc::ipc::Base::new(
+                format!("{prefix}_zero_calibrate").as_str(),
+                Some("Offset current weight on cell as zero"),
+            ),
+        );
+        tfc::ipc::dbus::SlotInterface::register(
+            zero_calibrate_slot.base(),
+            dbus.clone(),
+            zero_calibrate_slot.channel("dbus"),
+        );
+        let zero_calibrate_cmd = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let zero_calibrate_cmd_cp = zero_calibrate_cmd.clone();
+        zero_calibrate_slot.recv(Box::new(move |new_zero_calibrate| {
+            zero_calibrate_cmd_cp.store(*new_zero_calibrate, std::sync::atomic::Ordering::Relaxed);
+        }));
+
         Self {
             cnt: 0,
             config,
             log_key: prefix.clone(),
             mode,
             filter,
+            calibrate_cmd,
+            zero_calibrate_cmd,
+            calibrate_slot,
+            zero_calibrate_slot,
         }
     }
     /// Zero calibration
@@ -599,63 +600,68 @@ impl Device for El3356 {
         //         .pack_to_slice(&mut o)
         //         .expect("Error packing output PDO");
         // }
+        let raw_signal = input_pdo.raw_value as f64;
 
-        let signal = input_pdo.raw_value as f64;
+        let signal = self.filter.consume(raw_signal);
+
+        let signal = match &self.mode {
+            ModeImpl::Scale(ref scale) => {
+                let ratio = scale.ratio.load(std::sync::atomic::Ordering::Relaxed);
+                signal / ratio // normalized value of raw value with respect to the given ratio
+            }
+            ModeImpl::Reference(_) => signal,
+        };
+
+        // let's see whether we should set zero signal read now
+        if self
+            .zero_calibrate_cmd
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.config.write().value_mut().zero_signal_read = signal;
+            info!(target: &self.log_key, "Zero signal read set to {}", signal);
+            self.zero_calibrate_cmd
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        // let's see whether we should set calibration signal read now
+        if self
+            .calibrate_cmd
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.config.write().value_mut().calibration_signal_read = signal;
+            info!(target: &self.log_key, "Calibration signal read set to {}", signal);
+            self.calibrate_cmd
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        let zero = match &self.mode {
+            ModeImpl::Scale(ref scale) => self.config.read().zero_signal_read + scale.tare,
+            ModeImpl::Reference(_) => self.config.read().zero_signal_read,
+        };
+
+        let signal = signal - zero; // we are now offsetted by zero reading
+
+        let calibration_signal = self.config.read().calibration_signal_read;
+        let zeroed_calibration_signal = calibration_signal - zero;
+        if zeroed_calibration_signal <= 0.0 {
+            return Err("Zeroed calibration signal is <= 0, this should not happen".into());
+        }
+        // now we have the mass in full resolution
+        let signal_mass = signal * self.config.read().calibration_load / zeroed_calibration_signal;
 
         match &mut self.mode {
             ModeImpl::Scale(ref mut scale) => {
-                let ratio = scale.ratio.load(std::sync::atomic::Ordering::Relaxed);
-                let signal_scaled = signal / ratio; // normalized value of raw value with respect to the given ratio
-
-                // filter the signal
-                let signal_scaled = self.filter.consume(signal_scaled);
-
-                // let's see whether we should set zero signal read now
-                if scale
-                    .zero_calibrate_cmd
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    self.config.write().value_mut().zero_signal_read = signal_scaled;
-                    info!(target: &self.log_key, "Zero signal read set to {}", signal_scaled);
-                    scale
-                        .zero_calibrate_cmd
-                        .store(false, std::sync::atomic::Ordering::Relaxed);
-                }
-                // let's see whether we should set calibration signal read now
-                if scale
-                    .calibrate_cmd
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    self.config.write().value_mut().calibration_signal_read = signal_scaled;
-                    info!(target: &self.log_key, "Calibration signal read set to {}", signal_scaled);
-                    scale
-                        .calibrate_cmd
-                        .store(false, std::sync::atomic::Ordering::Relaxed);
-                }
-
-                // lets go through linear interpolation
-                let zero = self.config.read().zero_signal_read + scale.tare;
-                let signal_withdrawn_zero = signal_scaled - zero;
-
                 // let's see whether we should set tare signal read now
                 // BIG TODO: we need to make sure that the tare offset is not too large, have configurable limits
                 if scale.tare_cmd.load(std::sync::atomic::Ordering::Relaxed) {
-                    scale.tare += signal_withdrawn_zero;
+                    scale.tare += signal;
                     info!(target: &self.log_key, "Tare offset set to {}", scale.tare);
                     scale
                         .tare_cmd
                         .store(false, std::sync::atomic::Ordering::Relaxed);
                 }
 
-                let calibration_signal = self.config.read().calibration_signal_read;
-                let zeroed_calibration_signal = calibration_signal - zero;
-                if zeroed_calibration_signal <= 0.0 {
-                    return Err("Zeroed calibration signal is <= 0, this should not happen".into());
-                }
-
-                let signal_mass = signal_withdrawn_zero * self.config.read().calibration_load
-                    / zeroed_calibration_signal;
-                // now we have the mass in full resolution, lets scale it down to the given resolution
+                // lets scale the full resolution down to the given resolution
                 let scaling_factor = 1.0 / self.config.read().resolution; // 0.001 example
                 let signal_mass_rounded = (signal_mass * scaling_factor).round() / scaling_factor;
 
@@ -673,14 +679,26 @@ impl Device for El3356 {
                 }
                 scale.last_mass = signal_mass_rounded;
                 scale.mass_signal.async_send(signal_mass_rounded).await?;
+                info!(target: &self.log_key, "Mass signal sent: {} at raw signal {}", signal_mass_rounded, raw_signal);
                 Ok(()) as Result<(), Box<dyn Error + Send + Sync>>
             }
             ModeImpl::Reference(ref mut reference) => {
-                let ref_ratio = signal / self.config.read().calibration_signal_read as f64;
+                let ref_ratio = signal_mass / self.config.read().calibration_load;
+                // info!(target: &self.log_key, "Reference ratio: {} at signal {}", ref_ratio, signal);
+
                 if (ref_ratio - reference.last_ratio).abs() > reference.ratio_epsilon {
-                    reference.ratio_signal.async_send(ref_ratio).await?;
-                    reference.last_ratio = ref_ratio;
+                    if ref_ratio > 0.0 && ref_ratio < 2.0 {
+                        reference.ratio_signal.async_send(ref_ratio).await?;
+                        reference.last_ratio = ref_ratio;
+                    } else {
+                        return Err(format!(
+                            "Reference ratio is out of bounds: {}, this should not happen",
+                            ref_ratio
+                        )
+                        .into());
+                    }
                 }
+
                 Ok(())
             }
         }?;
