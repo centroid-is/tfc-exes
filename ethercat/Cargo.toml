@@ -42,7 +42,7 @@ uom = { version = "0.36.0", default-features = false, features = [
 ]}
 bitflags = "2.6.0"
 smlang.workspace = true
-median = "0.3.2"
+ringbuf = "0.4.7"
 
 [[bin]]
 name = "ethercat"

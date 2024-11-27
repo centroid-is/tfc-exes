@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use atomic_refcell::AtomicRefMut;
 use ethercrab::{EtherCrabWireReadWrite, SubDevice, SubDevicePdi, SubDeviceRef};
 use ethercrab_wire::{EtherCrabWireRead, EtherCrabWireWrite};
-use log::warn;
+use log::{info, warn};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -212,9 +212,9 @@ struct Config {
     #[schemars(description = "Mode of operation")]
     mode: Mode,
     #[schemars(
-        description = "Number of samples to use for median filter, samples are every tx_pdo period according to manual. Roughly process data interval."
+        description = "Number of samples to use for average filter. Process data interval."
     )]
-    filter_samples: u16,
+    filter_window: u16,
 }
 
 impl Default for Config {
@@ -231,7 +231,7 @@ impl Default for Config {
             calibration_signal_read: 1000.0,
             resolution: 0.001,
             mode: Mode::default(),
-            filter_samples: 10,
+            filter_window: 100,
         }
     }
 }
@@ -273,8 +273,9 @@ pub struct Scale {
     mass_signal: tfc::ipc::Signal<f64>,
     tare: f64, // signal read tare for fixing zero point, runtime value
     ratio: Arc<AtomicF64>,
-    zero_calibrate: Arc<std::sync::atomic::AtomicBool>,
-    calibrate: Arc<std::sync::atomic::AtomicBool>,
+    zero_calibrate_cmd: Arc<std::sync::atomic::AtomicBool>,
+    calibrate_cmd: Arc<std::sync::atomic::AtomicBool>,
+    tare_cmd: Arc<std::sync::atomic::AtomicBool>,
     last_mass: f64,
 }
 impl Scale {
@@ -300,6 +301,7 @@ impl Scale {
             dbus.clone(),
             mass_signal.subscribe(),
         );
+        // zero calibrate slot
         let mut zero_calibrate_slot = tfc::ipc::Slot::new(
             dbus.clone(),
             tfc::ipc::Base::new(
@@ -317,6 +319,7 @@ impl Scale {
         zero_calibrate_slot.recv(Box::new(move |new_zero_calibrate| {
             zero_calibrate_cp.store(*new_zero_calibrate, std::sync::atomic::Ordering::Relaxed);
         }));
+        // calibrate slot
         let mut calibrate_slot = tfc::ipc::Slot::new(
             dbus.clone(),
         tfc::ipc::Base::new(
@@ -334,23 +337,37 @@ impl Scale {
         calibrate_slot.recv(Box::new(move |new_calibrate| {
             calibrate_cp.store(*new_calibrate, std::sync::atomic::Ordering::Relaxed);
         }));
+        // tare slot
+        let mut tare_slot = tfc::ipc::Slot::new(
+            dbus.clone(),
+            tfc::ipc::Base::new(
+                format!("{prefix}_tare").as_str(),
+                Some("Offset current weight on cell as tare, meaning it will zero out the current weight"),
+            ),
+        );
+        tfc::ipc::dbus::SlotInterface::register(
+            tare_slot.base(),
+            dbus.clone(),
+            tare_slot.channel("dbus"),
+        );
+        let tare = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let tare_cp = tare.clone();
+        tare_slot.recv(Box::new(move |new_tare| {
+            tare_cp.store(*new_tare, std::sync::atomic::Ordering::Relaxed);
+        }));
+
         Self {
             zero_calibrate_slot,
             calibrate_slot,
-            tare_slot: tfc::ipc::Slot::new(
-                dbus.clone(),
-                tfc::ipc::Base::new(
-                    format!("{prefix}_tare").as_str(),
-                    Some("Offset current weight on cell as tare, meaning it will zero out the current weight"),
-                ),
-            ),
+            tare_slot,
             ratio_slot,
             mass_signal,
             tare: 0.0,
             ratio,
-            zero_calibrate,
-            calibrate,
+            zero_calibrate_cmd: zero_calibrate,
+            calibrate_cmd: calibrate,
             last_mass: 0.0,
+            tare_cmd: tare,
         }
     }
 }
@@ -387,95 +404,30 @@ pub enum ModeImpl {
     Reference(ReferenceScale),
 }
 
-mod my_median {
-    #[derive(Debug)]
-    pub struct MedianFilter {
-        capacity: usize,
-        window: std::collections::VecDeque<f64>, // Sliding window of elements
-        sorted_indices: Vec<usize>,              // Indices into the window VecDeque
+mod my_avg {
+    // TODO: I would much rather like to use median filter, but is is harder to implement it REALLY FAST than average
+    pub struct AvgFilter {
+        window: ringbuf::HeapRb<f64>,
+        sum: f64,
     }
-
-    impl MedianFilter {
-        /// Creates a new MedianFilter with the specified capacity.
+    impl AvgFilter {
         pub fn new(capacity: usize) -> Self {
             Self {
-                capacity,
-                window: std::collections::VecDeque::with_capacity(capacity),
-                sorted_indices: Vec::with_capacity(capacity),
+                window: ringbuf::HeapRb::new(capacity),
+                sum: 0.0,
             }
         }
-
-        /// Appends a value to the filter and updates the median.
         pub fn consume(&mut self, value: f64) -> f64 {
-            // If capacity is reached, remove the oldest element.
-            if self.window.len() == self.capacity {
-                self.remove_oldest();
+            use ringbuf::traits::{Consumer, Observer, Producer};
+            if self.window.is_full() {
+                let old_value = self.window.try_pop().expect("This should never happen");
+                self.sum -= old_value;
             }
-
-            // Add new value to the window.
-            self.window.push_back(value);
-
-            // Insert the index of the new value into sorted_indices.
-            let idx = self.window.len() - 1;
-            let insertion_point = self
-                .sorted_indices
-                .binary_search_by(|&i| self.window[i].total_cmp(&value))
-                .unwrap_or_else(|e| e);
-            self.sorted_indices.insert(insertion_point, idx);
-
-            return self.median().expect("This should never happen");
-        }
-
-        /// Removes the oldest value from the filter.
-        fn remove_oldest(&mut self) {
-            // Remove the oldest element from the window.
-            self.window.pop_front();
-
-            let mut i = 0;
-            while i < self.sorted_indices.len() {
-                if self.sorted_indices[i] == 0 {
-                    self.sorted_indices.remove(i);
-                } else {
-                    self.sorted_indices[i] -= 1;
-                    i += 1;
-                }
-            }
-
-            // // Adjust indices in sorted_indices.
-            // let mut removed_index = None;
-            // for (i, &idx) in self.sorted_indices.iter().enumerate() {
-            //     if idx == 0 {
-            //         // Found the index of the oldest element.
-            //         removed_index = Some(i);
-            //     } else {
-            //         // Decrement indices to account for the removed element.
-            //         self.sorted_indices[i] = idx - 1;
-            //     }
-            // }
-
-            // // Remove the index of the oldest element from sorted_indices.
-            // if let Some(i) = removed_index {
-            //     self.sorted_indices.remove(i);
-            // }
-        }
-
-        /// Retrieves the current median value.
-        pub fn median(&self) -> Option<f64> {
-            let len = self.sorted_indices.len();
-            if len == 0 {
-                return None;
-            }
-
-            if len % 2 == 1 {
-                // Odd number of elements.
-                let mid_idx = self.sorted_indices[len / 2];
-                Some(self.window[mid_idx])
-            } else {
-                // Even number of elements.
-                let mid1_idx = self.sorted_indices[len / 2 - 1];
-                let mid2_idx = self.sorted_indices[len / 2];
-                Some((self.window[mid1_idx] + self.window[mid2_idx]) / 2.0)
-            }
+            self.sum += value;
+            self.window
+                .try_push(value)
+                .expect("This should never happen");
+            self.sum / self.window.capacity().get() as f64
         }
     }
 }
@@ -485,7 +437,7 @@ pub struct El3356 {
     config: ConfMan<Config>,
     log_key: String,
     mode: ModeImpl,
-    filter: my_median::MedianFilter,
+    filter: my_avg::AvgFilter,
 }
 
 impl El3356 {
@@ -502,13 +454,14 @@ impl El3356 {
                 ModeImpl::Reference(ReferenceScale::new(dbus.clone(), prefix.clone()))
             }
         };
+        let filter = my_avg::AvgFilter::new(config.read().filter_window as usize);
 
         Self {
             cnt: 0,
             config,
             log_key: prefix.clone(),
             mode,
-            filter: my_median::MedianFilter::new(100),
+            filter,
         }
     }
     /// Zero calibration
@@ -623,26 +576,29 @@ impl Device for El3356 {
 
         let input_pdo = InputPdo::unpack_from_slice(&i)?;
 
+        // tx_pdo does not change when the value from the sensor is the same for some period of time
+        // the average filter needs to include all this period so let's not return early here
         // if !input_pdo.status_word.tx_pdo {
         //     return Ok(());
         // }
 
-        if self.cnt % 1000 == 0 {
-            let input_pdo = InputPdo::unpack_from_slice(&i).expect("Error unpacking input PDO");
-            let output_pdo = OutputPdo {
-                control_word: ControlWord {
-                    start_calibration: false,
-                    disable_calibration: true,
-                    input_freeze: false,
-                    sample_mode: false,
-                    tare: false,
-                },
-            };
-            warn!(target: &self.log_key, "El3356: {}, i: {input_pdo:?}, o: {o:?}", self.cnt);
-            output_pdo
-                .pack_to_slice(&mut o)
-                .expect("Error packing output PDO");
-        }
+        // debug logging
+        // if self.cnt % 1000 == 0 {
+        //     let input_pdo = InputPdo::unpack_from_slice(&i).expect("Error unpacking input PDO");
+        //     let output_pdo = OutputPdo {
+        //         control_word: ControlWord {
+        //             start_calibration: false,
+        //             disable_calibration: true,
+        //             input_freeze: false,
+        //             sample_mode: false,
+        //             tare: false,
+        //         },
+        //     };
+        //     warn!(target: &self.log_key, "El3356: {}, i: {input_pdo:?}, o: {o:?}", self.cnt);
+        //     output_pdo
+        //         .pack_to_slice(&mut o)
+        //         .expect("Error packing output PDO");
+        // }
 
         let signal = input_pdo.raw_value as f64;
 
@@ -652,32 +608,45 @@ impl Device for El3356 {
                 let signal_scaled = signal / ratio; // normalized value of raw value with respect to the given ratio
 
                 // filter the signal
-                let instant = std::time::Instant::now();
                 let signal_scaled = self.filter.consume(signal_scaled);
-                let duration = instant.elapsed();
-                warn!(target: &self.log_key, "El3356: filter duration: {:?}", duration);
 
                 // let's see whether we should set zero signal read now
                 if scale
-                    .zero_calibrate
+                    .zero_calibrate_cmd
                     .load(std::sync::atomic::Ordering::Relaxed)
                 {
                     self.config.write().value_mut().zero_signal_read = signal_scaled;
+                    info!(target: &self.log_key, "Zero signal read set to {}", signal_scaled);
                     scale
-                        .zero_calibrate
+                        .zero_calibrate_cmd
                         .store(false, std::sync::atomic::Ordering::Relaxed);
                 }
                 // let's see whether we should set calibration signal read now
-                if scale.calibrate.load(std::sync::atomic::Ordering::Relaxed) {
+                if scale
+                    .calibrate_cmd
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
                     self.config.write().value_mut().calibration_signal_read = signal_scaled;
+                    info!(target: &self.log_key, "Calibration signal read set to {}", signal_scaled);
                     scale
-                        .calibrate
+                        .calibrate_cmd
                         .store(false, std::sync::atomic::Ordering::Relaxed);
                 }
 
                 // lets go through linear interpolation
                 let zero = self.config.read().zero_signal_read + scale.tare;
                 let signal_withdrawn_zero = signal_scaled - zero;
+
+                // let's see whether we should set tare signal read now
+                // BIG TODO: we need to make sure that the tare offset is not too large, have configurable limits
+                if scale.tare_cmd.load(std::sync::atomic::Ordering::Relaxed) {
+                    scale.tare += signal_withdrawn_zero;
+                    info!(target: &self.log_key, "Tare offset set to {}", scale.tare);
+                    scale
+                        .tare_cmd
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+
                 let calibration_signal = self.config.read().calibration_signal_read;
                 let zeroed_calibration_signal = calibration_signal - zero;
                 if zeroed_calibration_signal <= 0.0 {
