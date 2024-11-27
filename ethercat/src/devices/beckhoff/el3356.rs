@@ -387,93 +387,105 @@ pub enum ModeImpl {
     Reference(ReferenceScale),
 }
 
-// mod my_median {
-//     #[derive(Debug)]
-//     pub struct MedianFilter {
-//         capacity: usize,
-//         window: std::collections::VecDeque<f64>, // Sliding window of elements
-//         sorted_indices: Vec<usize>,              // Indices into the window VecDeque
-//     }
+mod my_median {
+    #[derive(Debug)]
+    pub struct MedianFilter {
+        capacity: usize,
+        window: std::collections::VecDeque<f64>, // Sliding window of elements
+        sorted_indices: Vec<usize>,              // Indices into the window VecDeque
+    }
 
-//     impl MedianFilter {
-//         /// Creates a new MedianFilter with the specified capacity.
-//         pub fn new(capacity: usize) -> Self {
-//             Self {
-//                 capacity,
-//                 window: std::collections::VecDeque::with_capacity(capacity),
-//                 sorted_indices: Vec::with_capacity(capacity),
-//             }
-//         }
+    impl MedianFilter {
+        /// Creates a new MedianFilter with the specified capacity.
+        pub fn new(capacity: usize) -> Self {
+            Self {
+                capacity,
+                window: std::collections::VecDeque::with_capacity(capacity),
+                sorted_indices: Vec::with_capacity(capacity),
+            }
+        }
 
-//         /// Appends a value to the filter and updates the median.
-//         pub fn append(&mut self, value: f64) {
-//             // If capacity is reached, remove the oldest element.
-//             if self.window.len() == self.capacity {
-//                 self.remove_oldest();
-//             }
+        /// Appends a value to the filter and updates the median.
+        pub fn consume(&mut self, value: f64) -> f64 {
+            // If capacity is reached, remove the oldest element.
+            if self.window.len() == self.capacity {
+                self.remove_oldest();
+            }
 
-//             // Add new value to the window.
-//             self.window.push_back(value);
+            // Add new value to the window.
+            self.window.push_back(value);
 
-//             // Insert the index of the new value into sorted_indices.
-//             let idx = self.window.len() - 1;
-//             let insertion_point = self
-//                 .sorted_indices
-//                 .binary_search_by(|&i| self.window[i].total_cmp(&value))
-//                 .unwrap_or_else(|e| e);
-//             self.sorted_indices.insert(insertion_point, idx);
-//         }
+            // Insert the index of the new value into sorted_indices.
+            let idx = self.window.len() - 1;
+            let insertion_point = self
+                .sorted_indices
+                .binary_search_by(|&i| self.window[i].total_cmp(&value))
+                .unwrap_or_else(|e| e);
+            self.sorted_indices.insert(insertion_point, idx);
 
-//         /// Removes the oldest value from the filter.
-//         fn remove_oldest(&mut self) {
-//             // Remove the oldest element from the window.
-//             self.window.pop_front();
+            return self.median().expect("This should never happen");
+        }
 
-//             // Adjust indices in sorted_indices.
-//             let mut removed_index = None;
-//             for (i, &idx) in self.sorted_indices.iter().enumerate() {
-//                 if idx == 0 {
-//                     // Found the index of the oldest element.
-//                     removed_index = Some(i);
-//                 } else {
-//                     // Decrement indices to account for the removed element.
-//                     self.sorted_indices[i] = idx - 1;
-//                 }
-//             }
+        /// Removes the oldest value from the filter.
+        fn remove_oldest(&mut self) {
+            // Remove the oldest element from the window.
+            self.window.pop_front();
 
-//             // Remove the index of the oldest element from sorted_indices.
-//             if let Some(i) = removed_index {
-//                 self.sorted_indices.remove(i);
-//             }
-//         }
+            let mut i = 0;
+            while i < self.sorted_indices.len() {
+                if self.sorted_indices[i] == 0 {
+                    self.sorted_indices.remove(i);
+                } else {
+                    self.sorted_indices[i] -= 1;
+                    i += 1;
+                }
+            }
 
-//         /// Retrieves the current median value.
-//         pub fn median(&self) -> Option<f64> {
-//             let len = self.sorted_indices.len();
-//             if len == 0 {
-//                 return None;
-//             }
+            // // Adjust indices in sorted_indices.
+            // let mut removed_index = None;
+            // for (i, &idx) in self.sorted_indices.iter().enumerate() {
+            //     if idx == 0 {
+            //         // Found the index of the oldest element.
+            //         removed_index = Some(i);
+            //     } else {
+            //         // Decrement indices to account for the removed element.
+            //         self.sorted_indices[i] = idx - 1;
+            //     }
+            // }
 
-//             if len % 2 == 1 {
-//                 // Odd number of elements.
-//                 let mid_idx = self.sorted_indices[len / 2];
-//                 Some(self.window[mid_idx])
-//             } else {
-//                 // Even number of elements.
-//                 let mid1_idx = self.sorted_indices[len / 2 - 1];
-//                 let mid2_idx = self.sorted_indices[len / 2];
-//                 Some((self.window[mid1_idx] + self.window[mid2_idx]) / 2.0)
-//             }
-//         }
-//     }
-// }
+            // // Remove the index of the oldest element from sorted_indices.
+            // if let Some(i) = removed_index {
+            //     self.sorted_indices.remove(i);
+            // }
+        }
+
+        /// Retrieves the current median value.
+        pub fn median(&self) -> Option<f64> {
+            let len = self.sorted_indices.len();
+            if len == 0 {
+                return None;
+            }
+
+            if len % 2 == 1 {
+                // Odd number of elements.
+                let mid_idx = self.sorted_indices[len / 2];
+                Some(self.window[mid_idx])
+            } else {
+                // Even number of elements.
+                let mid1_idx = self.sorted_indices[len / 2 - 1];
+                let mid2_idx = self.sorted_indices[len / 2];
+                Some((self.window[mid1_idx] + self.window[mid2_idx]) / 2.0)
+            }
+        }
+    }
+}
 
 pub struct El3356 {
     cnt: u128,
     config: ConfMan<Config>,
     log_key: String,
     mode: ModeImpl,
-    filter: median::Filter<f64>,
+    filter: my_median::MedianFilter,
 }
 
 impl El3356 {
@@ -496,7 +508,7 @@ impl El3356 {
             config,
             log_key: prefix.clone(),
             mode,
-            filter: median::Filter::new(100),
+            filter: my_median::MedianFilter::new(100),
         }
     }
     /// Zero calibration
