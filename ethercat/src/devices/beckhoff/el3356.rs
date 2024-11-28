@@ -384,6 +384,7 @@ mod my_avg {
             self.window
                 .try_push(value)
                 .expect("This should never happen");
+            // this is incorrect while window is getting filled, should not be problematic
             self.sum / self.window.capacity().get() as f64
         }
     }
